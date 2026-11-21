@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>VM Console</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  html, body { height: 100%; }
+  body { display: flex; flex-direction: column; background: #000; }
+  header { background: var(--card); }
+  #screen { flex: 1; min-height: 0; }
+  #state { font-size: 13px; }
+  .tools { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tools button { min-height: 34px; padding: 6px 10px; font-size: 13px; }
+  #kbd { position: absolute; opacity: 0; width: 1px; height: 1px; left: -10px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="row"><a class="btn" href="/">←</a><strong id="title">Console</strong><span id="state" class="muted"></span></div>
+  <div class="tools">
+    <button id="keyboard">⌨</button>
+    <button id="cad">Ctrl+Alt+Del</button>
+    <button id="pause">Pause</button>
+  </div>
+</header>
+<div id="screen"></div>
+<input id="kbd" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false">
+<script type="module">
+import RFB from './novnc/core/rfb.js';
+
+const params = new URLSearchParams(location.search);
+const vm = params.get('vm');
+const port = params.get('port');
+const stateEl = document.getElementById('state');
+document.getElementById('title').textContent = vm;
+document.title = vm + ' – Console';
+
+let rfb;
+function connect() {
+  stateEl.textContent = 'connecting…';
+  rfb = new RFB(document.getElementById('screen'), `ws://127.0.0.1:${port}`, { shared: true });
+  rfb.scaleViewport = true;
+  rfb.resizeSession = false;
+  rfb.background = '#000';
+  rfb.addEventListener('connect', () => { stateEl.textContent = 'connected'; });
+  rfb.addEventListener('disconnect', () => {
+    stateEl.textContent = 'disconnected – retrying';
+    setTimeout(connect, 2000);
+  });
+}
+connect();
+
+// Keep the screen on while watching a VM, so it is not auto-paused mid-use.
+window.LimosaApp?.keepScreenOn(true);
+addEventListener('pagehide', () => window.LimosaApp?.keepScreenOn(false));
+
+document.getElementById('cad').onclick = () => rfb?.sendCtrlAltDel();
+
+// Soft keyboard: focus a hidden input and forward what is typed.
+const kbd = document.getElementById('kbd');
+document.getElementById('keyboard').onclick = () => { kbd.focus(); };
+kbd.addEventListener('input', (e) => {
+  const text = kbd.value;
+  kbd.value = '';
+  for (const ch of text) {
+    const code = ch.codePointAt(0);
+    const keysym = code < 0x100 ? code : 0x01000000 | code;
+    rfb?.sendKey(keysym, null);
+  }
+});
+kbd.addEventListener('keydown', (e) => {
+  const map = { Backspace: 0xff08, Enter: 0xff0d, Tab: 0xff09, Escape: 0xff1b,
+    ArrowLeft: 0xff51, ArrowUp: 0xff52, ArrowRight: 0xff53, ArrowDown: 0xff54 };
+  if (map[e.key]) { rfb?.sendKey(map[e.key], e.code); e.preventDefault(); }
+});
+
+const pauseBtn = document.getElementById('pause');
+async function vmState() {
+  const r = await fetch('/api/vms');
+  const list = await r.json();
+  return list.find(v => v.name === vm);
+}
+async function syncPause() {
+  const v = await vmState();
+  if (!v) return;
+  pauseBtn.textContent = v.state === 'paused' ? 'Resume' : 'Pause';
+  if (v.state === 'stopped') stateEl.textContent = 'VM is off';
+}
+pauseBtn.onclick = async () => {
+  const v = await vmState();
+  const action = v && v.state === 'paused' ? 'resume' : 'pause';
+  await fetch(`/api/vms/${encodeURIComponent(vm)}/${action}`, { method: 'POST' });
+  syncPause();
+};
+syncPause();
+setInterval(syncPause, 3000);
+</script>
+</body>
+</html>

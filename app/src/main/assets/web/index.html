@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Limosa VMs</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Limosa</h1>
+  <div class="row small"><span id="activity-dot" class="dot"></span><span id="activity-text" class="muted">…</span></div>
+</header>
+<main>
+  <div id="qemu-notice" class="card notice small" hidden></div>
+
+  <section>
+    <h2>Fake storage</h2>
+    <div class="card">
+      <div class="grid2">
+        <div><div class="muted small">VMs see</div><div class="big" id="st-virtual">–</div></div>
+        <div><div class="muted small">Actually on phone</div><div class="big" id="st-physical">–</div></div>
+      </div>
+      <div class="bar"><span id="st-bar" style="width:0"></span></div>
+      <div class="small muted" id="st-detail">–</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Virtual machines <button class="primary" id="new-vm">New VM</button></h2>
+    <div id="vms"></div>
+  </section>
+
+  <section>
+    <h2>Disks &amp; images
+      <span class="row"><button id="import-iso">Import ISO</button><button id="new-disk">New disk</button></span>
+    </h2>
+    <div id="disks"></div>
+  </section>
+
+  <section>
+    <h2>Power saving</h2>
+    <div class="card">
+      <form id="settings">
+        <label class="check"><input type="checkbox" name="enabled"> Pause VMs when the phone is inactive</label>
+        <label>Pause after the screen has been off for (seconds, -1 = never)</label>
+        <input type="number" name="screenOffDelaySec" min="-1" step="1">
+        <label class="check"><input type="checkbox" name="pauseOnDeviceIdle"> Pause in Doze (deep idle)</label>
+        <label class="check"><input type="checkbox" name="pauseWhenLocked"> Pause while the lock screen shows</label>
+        <label class="check"><input type="checkbox" name="pauseOnPowerSave"> Pause while Battery Saver is on</label>
+        <label>Pause when battery is at or below (%, 0 = never, ignored while charging)</label>
+        <input type="number" name="lowBatteryPercent" min="0" max="100">
+        <div class="actions"><button class="primary" type="submit">Save</button></div>
+      </form>
+      <p class="small muted">Auto-paused VMs are frozen completely (vCPUs stopped and the QEMU process suspended), so they use no CPU,
+        and resume where they were when you come back. VMs you pause yourself stay paused.</p>
+    </div>
+  </section>
+</main>
+
+<dialog id="vm-dialog">
+  <form method="dialog" id="vm-form">
+    <h3>New virtual machine</h3>
+    <label>Name</label><input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,63}" placeholder="debian">
+    <label>Architecture</label>
+    <select name="arch">
+      <option value="x86_64">x86-64 (PC)</option>
+      <option value="i386">x86 32-bit</option>
+      <option value="aarch64">ARM64</option>
+    </select>
+    <div class="grid2">
+      <div><label>Memory (MB)</label><input name="memoryMb" type="number" value="1024" min="64" step="64"></div>
+      <div><label>CPUs</label><input name="cpus" type="number" value="2" min="1" max="32"></div>
+    </div>
+    <label>Hard disk</label><select name="disk"></select>
+    <label>New disk size (GB, if creating one)</label><input name="newDiskGb" type="number" value="32" min="1">
+    <label>CD / installer image</label><select name="cdrom"></select>
+    <label class="check"><input type="checkbox" name="bootFromCdrom"> Boot from CD first</label>
+    <label class="check"><input type="checkbox" name="autoPause" checked> Auto-pause when the phone is inactive</label>
+    <label class="check"><input type="checkbox" name="network" checked> Network (NAT)</label>
+    <label>Extra QEMU arguments (advanced)</label><input name="extraArgs" placeholder="">
+    <div class="actions">
+      <button class="primary" value="save">Save</button>
+      <button value="cancel" formnovalidate>Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="disk-dialog">
+  <form method="dialog" id="disk-form">
+    <h3>New disk</h3>
+    <p class="small muted">Disks are thin: a 64 GB disk uses almost nothing until the VM writes to it, and identical blocks are stored once.</p>
+    <label>Name</label><input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,63}">
+    <label>Size (GB)</label><input name="sizeGb" type="number" value="32" min="0.01" step="any">
+    <div class="actions"><button class="primary" value="save">Create</button><button value="cancel" formnovalidate>Cancel</button></div>
+  </form>
+</dialog>
+
+<dialog id="iso-dialog">
+  <form method="dialog" id="iso-form">
+    <h3>Import ISO / image</h3>
+    <label>Name</label><input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,63}" placeholder="debian-installer">
+    <label class="check"><input type="checkbox" name="readOnly" checked> Read-only (CD image)</label>
+    <div id="iso-file-wrap" hidden><label>File</label><input type="file" name="file"></div>
+    <div class="actions"><button class="primary" value="save">Choose file &amp; import</button><button value="cancel" formnovalidate>Cancel</button></div>
+  </form>
+</dialog>
+
+<dialog id="log-dialog">
+  <h3 id="log-title">Log</h3>
+  <pre class="log" id="log-body"></pre>
+  <div class="actions"><button onclick="this.closest('dialog').close()">Close</button></div>
+</dialog>
+
+<div id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>
