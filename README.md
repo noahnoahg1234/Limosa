@@ -1,5 +1,9 @@
 # Limosa: virtual machines on Android
 
+**[⬇ Download limosa.apk](https://github.com/noahnoahg1234/Limosa/releases/latest/download/limosa.apk)** (latest build, for arm64 Android 8+) · [all releases](https://github.com/noahnoahg1234/Limosa/releases)
+
+To install, open the link on your phone, open the downloaded file and allow installing apps from your browser when Android asks.
+
 Limosa runs QEMU virtual machines on an Android phone. It has two features to save space and power:
 
 1. **Fake storage from a localhost site.** VM disks are not big image files. They live in a
@@ -56,15 +60,17 @@ python3 scripts/fetch_qemu_termux.py --abi arm64-v8a --targets x86_64,aarch64   
 
 Without an Android SDK, `settings.gradle.kts` builds only `:core`.
 
-GitHub Actions builds the APK on every push and uploads it as an artifact. The artifact is
-named `…-with-qemu` when QEMU bundling succeeded and `…-no-qemu` when it did not.
+GitHub Actions builds the APK on every push and publishes it as a GitHub Release, which is
+what the download link at the top points to. The release notes say whether QEMU was bundled.
 
 ### Bundling QEMU
 
 Android 10+ only lets apps run binaries from their native library folder. So each emulator ships as
 `app/src/main/jniLibs/<abi>/libqemu-system-<arch>.so`, with its shared libraries next to it and its
 firmware in `app/src/main/assets/qemu/`. `scripts/fetch_qemu_termux.py` fills these folders from
-Termux's prebuilt `qemu-system-*-headless` packages. Any other Android build of QEMU works too if
+Termux's prebuilt `qemu-system-*-headless` packages. It copies only the libraries QEMU needs and
+renames versioned ones (`libz.so.1` becomes `libz_1.so`, patched with `patchelf`), because Android
+only packages plain `*.so` files. It needs `readelf` and `patchelf`. Any other Android build of QEMU works too if
 you place the files the same way. QEMU must be built with NBD and VNC-websocket support, which are
 on by default.
 

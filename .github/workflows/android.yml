@@ -5,6 +5,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write   # lets the workflow publish the APK as a GitHub Release
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -25,7 +28,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Install qemu-utils (the NBD tests drive the server with qemu-io)
-        run: sudo apt-get update && sudo apt-get install -y qemu-utils binutils
+        run: sudo apt-get update && sudo apt-get install -y qemu-utils binutils patchelf
 
       - name: Core tests
         run: ./gradlew :core:test
@@ -42,7 +45,25 @@ jobs:
       - name: Build APK
         run: ./gradlew :app:assembleDebug
 
+      - name: Name the APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk limosa.apk
+
       - uses: actions/upload-artifact@v4
         with:
-          name: limosa-debug-apk${{ steps.qemu.outcome == 'success' && '-with-qemu' || '-no-qemu' }}
-          path: app/build/outputs/apk/debug/*.apk
+          name: limosa-apk${{ steps.qemu.outcome == 'success' && '-with-qemu' || '-no-qemu' }}
+          path: limosa.apk
+
+      - name: Publish GitHub Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Limosa build ${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          files: limosa.apk
+          body: |
+            Android APK for Limosa (arm64 phones).
+            QEMU bundled: ${{ steps.qemu.outcome == 'success' && 'yes (x86-64 and ARM64 guests)' || 'no - VMs cannot start in this build; storage and dashboard still work' }}.
+            Install: download `limosa.apk` on your phone, open it and allow installing from this source.
+            Built from ${{ github.sha }}.
