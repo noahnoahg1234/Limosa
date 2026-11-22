@@ -14,6 +14,7 @@ pluginManagement {
         // Versions only; resolved when the :app module applies them.
         id("com.android.application") version "8.7.3"
         id("org.jetbrains.kotlin.android") version "2.0.21"
+        id("org.jetbrains.kotlin.jvm") version "2.0.21"
     }
 }
 dependencyResolutionManagement {

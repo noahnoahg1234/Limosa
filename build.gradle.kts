@@ -1,4 +1,3 @@
-plugins {
-    // Loaded once at the root so :core and :app share the Kotlin plugin classes.
-    id("org.jetbrains.kotlin.jvm") version "2.0.21" apply false
-}
+// Plugin versions are declared in settings.gradle.kts (pluginManagement).
+// Do not apply the Kotlin plugin here: loading it in the root classloader hides the
+// Android Gradle Plugin's classes from it and breaks the :app build.
