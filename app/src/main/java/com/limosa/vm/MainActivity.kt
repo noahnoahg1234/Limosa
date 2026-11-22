@@ -58,15 +58,8 @@ class MainActivity : Activity() {
                     // The local server may still be starting; try again shortly.
                     view.postDelayed({ view.loadUrl(target) }, 1000)
                 } else {
-                    val msg = android.text.Html.escapeHtml("${error.description} (${error.errorCode})")
-                    view.loadDataWithBaseURL(
-                        null,
-                        "<meta name=viewport content='width=device-width'><body style='font-family:sans-serif;padding:24px'>" +
-                            "<h3>Limosa dashboard did not load</h3><p>$msg</p><p>${android.text.Html.escapeHtml(target)}</p>" +
-                            "<button onclick=\"location.href='${target}'\" style='padding:12px 20px'>Retry</button></body>",
-                        "text/html", "utf-8", null,
-                    )
                     loadRetries = 0
+                    showDiagnostics(view, target, "${error.description} (code ${error.errorCode})")
                 }
             }
         }
@@ -135,6 +128,45 @@ class MainActivity : Activity() {
             runOnUiThread {
                 js("window.limosaImportDone && window.limosaImportDone(${Json.stringify(name)}, ${Json.stringify(error)})")
             }
+        }
+    }
+
+    /**
+     * Shown when the WebView cannot load the dashboard: the WebView's error plus a direct
+     * HTTP check from the app itself, so a screenshot tells exactly where it breaks.
+     */
+    private fun showDiagnostics(view: WebView, target: String, webViewError: String) {
+        io.execute {
+            val direct = try {
+                val c = java.net.URL(target).openConnection() as java.net.HttpURLConnection
+                c.connectTimeout = 3000
+                c.readTimeout = 3000
+                val code = c.responseCode
+                c.disconnect()
+                "HTTP $code (the server works; the WebView is being blocked)"
+            } catch (t: Throwable) {
+                "failed: $t"
+            }
+            val engine = VmService.engine
+            val version = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull()
+            val lines = listOf(
+                "App version" to (version ?: "?"),
+                "WebView error" to webViewError,
+                "Direct check from app" to direct,
+                "Dashboard port" to (engine?.http?.port?.toString() ?: "engine not running"),
+                "Disk server port" to (engine?.nbd?.port?.toString() ?: "-"),
+                "Android" to "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), ${Build.SUPPORTED_ABIS.firstOrNull()}",
+                "WebView" to (runCatching { WebView.getCurrentWebViewPackage()?.versionName }.getOrNull() ?: "?"),
+            )
+            val rows = lines.joinToString("") { (k, v) ->
+                "<tr><td style='padding:4px 10px 4px 0;color:#666;vertical-align:top'>$k</td>" +
+                    "<td style='padding:4px 0;word-break:break-all'>${android.text.Html.escapeHtml(v)}</td></tr>"
+            }
+            val html = "<meta name=viewport content='width=device-width'>" +
+                "<body style='font-family:sans-serif;padding:20px'><h3>Limosa dashboard did not load</h3>" +
+                "<p>Please send a screenshot of this page.</p><table style='font-size:14px'>$rows</table>" +
+                "<p><button onclick=\"location.href='$target'\" style='padding:12px 20px;font-size:16px'>Retry</button></p></body>"
+            runOnUiThread { view.loadDataWithBaseURL(null, html, "text/html", "utf-8", null) }
         }
     }
 

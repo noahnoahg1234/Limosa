@@ -11,8 +11,10 @@ android {
         applicationId = "com.limosa.vm"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        // CI passes its run number so each published APK upgrades the previous one.
+        val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionCode = build
+        versionName = "0.1.$build"
         ndk {
             // QEMU for Android is published for these ABIs; add others if you bundle them.
             abiFilters += listOf("arm64-v8a", "x86_64")

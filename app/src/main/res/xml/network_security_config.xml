@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- The dashboard and VNC console are served over plain HTTP on the phone itself only. -->
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">127.0.0.1</domain>
-        <domain includeSubdomains="false">localhost</domain>
-    </domain-config>
+    <!--
+      The dashboard and VNC console are plain HTTP/WebSocket on 127.0.0.1 inside the phone.
+      Domain rules do not reliably match IP addresses on every Android version, so cleartext
+      is allowed app-wide; the app never talks to remote servers itself.
+    -->
+    <base-config cleartextTrafficPermitted="true" />
 </network-security-config>
