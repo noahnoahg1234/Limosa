@@ -9,7 +9,6 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.EOFException
 import java.io.IOException
-import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -34,7 +33,7 @@ class NbdServer(
 
     private val server = ServerSocket().apply {
         reuseAddress = true
-        bind(InetSocketAddress(InetAddress.getLoopbackAddress(), port))
+        bind(InetSocketAddress(com.limosa.core.LOOPBACK_V4, port))
     }
     val port: Int get() = server.localPort
     private val pool: ExecutorService = Executors.newCachedThreadPool { r ->

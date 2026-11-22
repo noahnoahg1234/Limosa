@@ -6,7 +6,6 @@ import java.io.Closeable
 import java.io.IOException
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
-import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 
@@ -55,7 +54,7 @@ class QmpClient private constructor(private val socket: Socket) : Closeable {
     companion object {
         fun connect(port: Int, timeoutMs: Int = 3000): QmpClient {
             val s = Socket()
-            s.connect(InetSocketAddress(InetAddress.getLoopbackAddress(), port), timeoutMs)
+            s.connect(InetSocketAddress(com.limosa.core.LOOPBACK_V4, port), timeoutMs)
             s.soTimeout = 15_000
             val c = QmpClient(s)
             try {

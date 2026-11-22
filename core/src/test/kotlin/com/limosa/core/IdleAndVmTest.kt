@@ -103,6 +103,10 @@ class IdleAndVmTest {
             assertEquals(VmManager.State.PAUSED, e.vms.running("three")!!.state, "user pause is kept")
             waitFor { e.vms.log("one").any { it.contains("qmp: cont") } }
 
+            // Must be IPv4 loopback: the WebView and QEMU use 127.0.0.1 (Android's
+            // getLoopbackAddress() is ::1, which broke the app once).
+            assertEquals("127.0.0.1", LOOPBACK_V4.hostAddress)
+
             // the localhost site
             val base = "http://127.0.0.1:${e.http.port}"
             assertEquals(401, http("GET", "$base/api/status").first)

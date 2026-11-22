@@ -7,7 +7,6 @@ import java.io.FilterInputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
-import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -57,7 +56,7 @@ class HttpServer(port: Int, private val handler: (Request) -> Response, private 
 
     private val server = ServerSocket().apply {
         reuseAddress = true
-        bind(InetSocketAddress(InetAddress.getLoopbackAddress(), port))
+        bind(InetSocketAddress(com.limosa.core.LOOPBACK_V4, port))
     }
     val port: Int get() = server.localPort
     private val pool: ExecutorService = Executors.newFixedThreadPool(8) { r -> Thread(r, "http").apply { isDaemon = true } }

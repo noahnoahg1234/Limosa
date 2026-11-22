@@ -29,6 +29,7 @@ class MainActivity : Activity() {
     private lateinit var web: WebView
     private val io = Executors.newSingleThreadExecutor()
     private var pendingImport: Pair<String, Boolean>? = null
+    private var loadRetries = 0
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -44,6 +45,29 @@ class MainActivity : Activity() {
                 if (u.host == "127.0.0.1" || u.host == "localhost") return false
                 runCatching { startActivity(Intent(Intent.ACTION_VIEW, u)) }
                 return true
+            }
+
+            override fun onPageFinished(view: WebView, url: String?) {
+                if (url?.startsWith("http://127.0.0.1") == true) loadRetries = 0
+            }
+
+            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
+                if (!request.isForMainFrame) return
+                val target = VmService.engine?.dashboardUrl ?: return
+                if (loadRetries++ < 5) {
+                    // The local server may still be starting; try again shortly.
+                    view.postDelayed({ view.loadUrl(target) }, 1000)
+                } else {
+                    val msg = android.text.Html.escapeHtml("${error.description} (${error.errorCode})")
+                    view.loadDataWithBaseURL(
+                        null,
+                        "<meta name=viewport content='width=device-width'><body style='font-family:sans-serif;padding:24px'>" +
+                            "<h3>Limosa dashboard did not load</h3><p>$msg</p><p>${android.text.Html.escapeHtml(target)}</p>" +
+                            "<button onclick=\"location.href='${target}'\" style='padding:12px 20px'>Retry</button></body>",
+                        "text/html", "utf-8", null,
+                    )
+                    loadRetries = 0
+                }
             }
         }
         web.addJavascriptInterface(Bridge(), "LimosaApp")
