@@ -2,6 +2,8 @@
 
 **[⬇ Download limosa.apk](https://github.com/noahnoahg1234/Limosa/releases/latest/download/limosa.apk)** (latest build, for arm64 Android 8+) · [all releases](https://github.com/noahnoahg1234/Limosa/releases)
 
+**[⬇ Download limosa-xr.apk](https://github.com/noahnoahg1234/Limosa/releases/latest/download/limosa-xr.apk)**: Limosa XR, a VR headset emulator (see [below](#limosa-xr-vr-headset-emulator)).
+
 To install, open the link on your phone, open the downloaded file and allow installing apps from your browser when Android asks.
 
 Limosa runs QEMU virtual machines on an Android phone. It has two features to save space and power:
@@ -131,3 +133,36 @@ Every request needs the token: the `limosa` cookie (set when you open `/?t=<toke
   running.
 - Android may still stop the app under extreme memory pressure. The store syncs to disk every 5 s
   and on every guest flush, so a crash loses at most the guest's unflushed writes, like a power cut.
+
+## Limosa XR: VR headset emulator
+
+`xr/` is a second app, **Limosa XR**. It runs WebXR VR apps on a phone as if the phone were a standalone
+VR headset with two touch controllers. On a real headset these apps run in the headset's browser.
+
+- **WebXR emulation.** `xr/src/main/assets/xr/webxr-emulator.js` is injected before any page script, in
+  every frame. It provides `navigator.xr` (`immersive-vr` and `inline`) with reference spaces
+  (`local`, `local-floor`, `bounded-floor`, `unbounded`), `XRWebGLLayer`, and two `tracked-pointer` controllers.
+  The controllers use the `xr-standard` gamepad mapping, report Touch-controller profiles, and send
+  select and squeeze events. Haptics vibrate the phone. three.js, A-Frame, Babylon.js and plain-WebGL apps
+  render into their own canvas, which fills the screen while in VR.
+- **Touch controls**, transparent and drawn over the VR view:
+  - **1 finger:** look around.
+  - **2 fingers:** the left finger moves the left hand and the right finger moves the right hand.
+    **Hand: Move / Depth / Aim** changes whether the fingers move the hands up, down and sideways, push them
+    forward and back, or rotate them.
+  - **LT/RT** are the triggers, **LG/RG** the grips, and **X Y A B** the face buttons.
+  - Two **thumbsticks**. A quick tap on a stick clicks it.
+  - **Gyro** (look by moving the phone), **View: flat/3D** (side-by-side stereo for phone headsets),
+    **⟲ Center**, **⌂ Home** and **✕ Exit VR**.
+- **Launcher.** It has a URL bar, saved apps, a list of WebXR sites, an offline **XR Playground** (grab, throw and shoot cubes)
+  and settings for eye height, field of view, eye distance, render resolution and the headset user agent.
+  It can open `http://<your-pc>:port` dev servers and "Open with" web links.
+
+What it cannot do: run native headset apps (APKs from a headset store or SideQuest). Those need the headset's own
+OS, runtime services and GPU, which a phone app cannot provide. Hand tracking, passthrough/AR, composition layers
+and hit testing are not emulated. If a page asks for them as *required* features, it gets the same "not supported"
+answer a browser without them would give.
+
+```sh
+./gradlew :xr:assembleDebug     # -> xr/build/outputs/apk/debug/xr-debug.apk
+```

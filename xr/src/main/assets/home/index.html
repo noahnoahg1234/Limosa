@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Limosa XR Home</title>
+<style>
+  :root { --bg:#0f1115; --card:#1b1f27; --card2:#242a35; --text:#e9edf3; --dim:#9aa4b2; --accent:#7cc4ff; --warn:#f6c177; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.4 system-ui, sans-serif; padding:16px 20px 40px; }
+  h1 { font-size:20px; margin:0 0 2px; }
+  h2 { font-size:14px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin:22px 0 10px; }
+  .sub { color:var(--dim); font-size:13px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); gap:12px; }
+  .card { background:var(--card); border-radius:14px; padding:14px; cursor:pointer; position:relative; border:1px solid transparent; }
+  .card:active { border-color:var(--accent); }
+  .card .t { font-weight:600; margin-bottom:4px; padding-right:18px; }
+  .card .d { color:var(--dim); font-size:12.5px; }
+  .card .x { position:absolute; right:8px; top:6px; color:var(--dim); font-size:18px; padding:2px 6px; }
+  .tag { display:inline-block; font-size:11px; padding:1px 7px; border-radius:10px; background:var(--card2); color:var(--accent); margin-top:6px; }
+  form { display:flex; gap:8px; flex-wrap:wrap; }
+  input[type=text], input[type=url] { flex:1 1 160px; background:var(--card); color:var(--text); border:1px solid #333a46; border-radius:10px; padding:10px 12px; font-size:15px; min-width:0; }
+  button { background:var(--accent); color:#06121d; border:0; border-radius:10px; padding:10px 16px; font-weight:600; font-size:14px; }
+  .settings { background:var(--card); border-radius:14px; padding:6px 14px; }
+  .row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:9px 0; border-bottom:1px solid #2a303b; }
+  .row:last-child { border-bottom:0; }
+  .row label { flex:1; }
+  .row small { display:block; color:var(--dim); }
+  .row output { width:52px; text-align:right; color:var(--accent); font-variant-numeric:tabular-nums; }
+  input[type=range] { width:150px; }
+  .help { background:var(--card); border-radius:14px; padding:12px 16px; color:var(--dim); font-size:13.5px; }
+  .help b { color:var(--text); }
+  .note { color:var(--warn); font-size:13px; }
+</style>
+</head>
+<body>
+  <h1>Limosa XR</h1>
+  <div class="sub">A VR headset emulator for WebXR apps. Open an app, press its <b>Enter VR</b> button (or the one in the top bar), and play with the on-screen controllers.</div>
+
+  <h2>Open an app</h2>
+  <form id="open">
+    <input type="url" id="url" placeholder="https://… (any WebXR site, or http://192.168.x.x:port for your dev server)" autocomplete="off">
+    <input type="text" id="name" placeholder="Name (to save it)" style="flex:0 1 160px">
+    <button type="submit">Open</button>
+    <button type="button" id="save" style="background:var(--card2);color:var(--text)">Save</button>
+  </form>
+
+  <h2>Your apps</h2>
+  <div class="grid" id="mine"></div>
+
+  <h2>Built in</h2>
+  <div class="grid" id="builtin"></div>
+
+  <h2>WebXR apps on the web</h2>
+  <div class="grid" id="web"></div>
+
+  <h2>Controls in VR</h2>
+  <div class="help">
+    <b>1 finger</b> on empty space: look around. <b>2 fingers</b>: the left finger moves the left controller, the right finger the right one.
+    Tap <b>Hand: Move</b> to switch fingers to <b>Depth</b> (push hands forward and back) or <b>Aim</b> (rotate the controllers).<br>
+    <b>LT / RT</b> are the triggers (select), <b>LG / RG</b> the grips (squeeze), <b>X Y A B</b> the face buttons. The circles at the
+    bottom are thumbsticks; a quick tap on a stick clicks it. <b>Gyro</b> lets you look around by moving the phone, <b>View: 3D</b>
+    switches to side-by-side stereo for a phone headset, <b>⟲ Center</b> resets the view and hands, the back button leaves VR.
+  </div>
+
+  <h2>Settings</h2>
+  <div class="settings" id="settings"></div>
+  <p class="note">Apps built for the browser (WebXR) run here. Native headset apps (APK files from a store or SideQuest) cannot:
+    they need the headset's own operating system and hardware.</p>
+
+<script>
+(function () {
+  var bridge = window.QuestXR;
+  var BUILTIN = [
+    { name: 'XR Playground', url: '../apps/playground/index.html', desc: 'Grab, throw and shoot cubes. Works offline; a quick test of every control.', tag: 'offline' },
+  ];
+  var WEB = [
+    { name: 'three.js: Ball shooter', url: 'https://threejs.org/examples/webxr_xr_ballshooter.html', desc: 'Pull the trigger to fire balls around a room.', tag: 'three.js' },
+    { name: 'three.js: Dragging', url: 'https://threejs.org/examples/webxr_xr_dragging.html', desc: 'Point at shapes and pick them up with the trigger.', tag: 'three.js' },
+    { name: 'three.js: Paint', url: 'https://threejs.org/examples/webxr_xr_paint.html', desc: 'Paint in the air while holding the trigger.', tag: 'three.js' },
+    { name: 'three.js: Roller coaster', url: 'https://threejs.org/examples/webxr_vr_rollercoaster.html', desc: 'Sit back and ride.', tag: 'three.js' },
+    { name: 'three.js: Teleport', url: 'https://threejs.org/examples/webxr_vr_teleport.html', desc: 'Aim at the floor and teleport with the trigger.', tag: 'three.js' },
+    { name: 'WebXR samples', url: 'https://immersive-web.github.io/webxr-samples/', desc: 'The official W3C Immersive Web sample collection.', tag: 'samples' },
+    { name: 'Moon Rider', url: 'https://moonrider.xyz/', desc: 'Rhythm game: hit the beats with your controllers.', tag: 'game' },
+    { name: 'A-Frame examples', url: 'https://aframe.io/examples/', desc: 'Scenes built with the A-Frame framework.', tag: 'A-Frame' },
+  ];
+  function load() { try { return JSON.parse(localStorage.getItem('apps') || '[]'); } catch (e) { return []; } }
+  function store(a) { try { localStorage.setItem('apps', JSON.stringify(a)); } catch (e) {} }
+  function card(app, removable, i) {
+    var el = document.createElement('div');
+    el.className = 'card';
+    el.innerHTML = '<div class="t"></div><div class="d"></div>' + (app.tag ? '<span class="tag"></span>' : '') + (removable ? '<span class="x" title="Remove">×</span>' : '');
+    el.querySelector('.t').textContent = app.name;
+    el.querySelector('.d').textContent = app.desc || app.url;
+    if (app.tag) el.querySelector('.tag').textContent = app.tag;
+    el.onclick = function (e) {
+      if (e.target.className === 'x') { var a = load(); a.splice(i, 1); store(a); render(); return; }
+      location.href = app.url;
+    };
+    return el;
+  }
+  function render() {
+    var mine = document.getElementById('mine');
+    mine.innerHTML = '';
+    var apps = load();
+    if (!apps.length) mine.innerHTML = '<div class="sub">Saved apps show up here.</div>';
+    apps.forEach(function (a, i) { mine.appendChild(card(a, true, i)); });
+    ['builtin', 'web'].forEach(function (id) {
+      var g = document.getElementById(id);
+      g.innerHTML = '';
+      (id === 'builtin' ? BUILTIN : WEB).forEach(function (a) { g.appendChild(card(a, false)); });
+    });
+  }
+  function normalize(u) {
+    u = u.trim();
+    if (!u) return '';
+    if (!/^[a-z]+:\/\//i.test(u)) u = (/^(localhost|\d+\.\d+\.\d+\.\d+)/.test(u) ? 'http://' : 'https://') + u;
+    return u;
+  }
+  document.getElementById('open').onsubmit = function (e) {
+    e.preventDefault();
+    var u = normalize(document.getElementById('url').value);
+    if (u) location.href = u;
+  };
+  document.getElementById('save').onclick = function () {
+    var u = normalize(document.getElementById('url').value);
+    if (!u) return;
+    var n = document.getElementById('name').value.trim() || u.replace(/^https?:\/\//, '');
+    var a = load(); a.push({ name: n, url: u }); store(a); render();
+    document.getElementById('url').value = ''; document.getElementById('name').value = '';
+  };
+
+  // Settings live in the app (SharedPreferences) so they apply to every site.
+  var S = {};
+  try { S = bridge ? JSON.parse(bridge.settings()) : {}; } catch (e) {}
+  var defs = [
+    { k: 'questUserAgent', type: 'bool', label: 'Report a VR headset browser', help: 'Some sites only offer VR to headset browsers. Reload the page after changing.' },
+    { k: 'gyro', type: 'bool', label: 'Look around with the gyro', help: S.gyroAvailable === false ? 'This phone has no rotation sensor.' : 'Move the phone to look. You can also toggle it in VR.' },
+    { k: 'stereo', type: 'bool', label: 'Side-by-side 3D', help: 'For phone VR headsets. Flat view is easier to play on a screen.' },
+    { k: 'eyeHeight', type: 'range', label: 'Eye height', min: 0.8, max: 2.1, step: 0.05, unit: ' m' },
+    { k: 'fov', type: 'range', label: 'Field of view', min: 50, max: 110, step: 1, unit: '°' },
+    { k: 'ipd', type: 'range', label: 'Eye distance (3D)', min: 0.05, max: 0.075, step: 0.001, unit: '', fmt: function (v) { return Math.round(v * 1000) + ' mm'; } },
+    { k: 'renderScale', type: 'range', label: 'Render resolution', min: 0.25, max: 1, step: 0.05, fmt: function (v) { return Math.round(v * 100) + '%'; }, help: 'Lower it if apps run slowly.' },
+  ];
+  var box = document.getElementById('settings');
+  defs.forEach(function (d) {
+    var row = document.createElement('div');
+    row.className = 'row';
+    var lab = document.createElement('label');
+    lab.textContent = d.label;
+    if (d.help) { var sm = document.createElement('small'); sm.textContent = d.help; lab.appendChild(sm); }
+    row.appendChild(lab);
+    var input = document.createElement('input');
+    if (d.type === 'bool') {
+      input.type = 'checkbox';
+      input.checked = !!S[d.k];
+      input.onchange = function () { bridge && bridge.setSetting(d.k, String(input.checked)); };
+      row.appendChild(input);
+    } else {
+      input.type = 'range'; input.min = d.min; input.max = d.max; input.step = d.step;
+      input.value = S[d.k] !== undefined ? S[d.k] : d.min;
+      var out = document.createElement('output');
+      var show = function () { var v = parseFloat(input.value); out.textContent = d.fmt ? d.fmt(v) : (Math.round(v * 100) / 100) + (d.unit || ''); };
+      show();
+      input.oninput = show;
+      input.onchange = function () { bridge && bridge.setSetting(d.k, input.value); };
+      row.appendChild(input);
+      row.appendChild(out);
+    }
+    box.appendChild(row);
+  });
+  if (!bridge) box.innerHTML = '<div class="row"><label>Settings are available inside the Limosa XR app.</label></div>';
+  render();
+})();
+</script>
+</body>
+</html>
