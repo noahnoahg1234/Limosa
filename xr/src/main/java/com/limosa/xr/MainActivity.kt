@@ -256,8 +256,11 @@ class MainActivity : Activity(), ControllerOverlay.Listener {
         val uri = data?.data ?: return
         homeEvent("installing", null)
         io.execute {
-            val err = nativeApps.install(this, uri)
-            runOnUiThread { if (err != null) homeEvent("installed", err) }
+            val r = nativeApps.install(this, uri)
+            runOnUiThread {
+                if (r.error != null) homeEvent("installed", r.error)
+                if (r.note != null) homeEvent("note", r.note)
+            }
         }
     }
 

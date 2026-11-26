@@ -51,7 +51,7 @@
     <h2>Native VR games (APK)</h2>
     <div class="status" id="rtstatus"></div>
     <div class="row2">
-      <button type="button" id="installApk">Install APK…</button>
+      <button type="button" id="installApk">Install APK / APKM…</button>
       <button type="button" class="btn2" id="refreshApps">Refresh</button>
       <button type="button" class="btn2" id="showLog">Runtime log</button>
     </div>
@@ -92,7 +92,7 @@
   <div class="settings" id="settings"></div>
   <p class="note">Native games: Limosa XR is an OpenXR runtime. Games built with the standard Khronos OpenXR loader (many recent
     Unity, Unreal and Godot games) can start with it. Games built only for one headset's own loader, old VrApi games, and store
-    games that check their license online cannot. Games that need extra data files (OBB) need them copied to Android/obb as usual.</p>
+    games that check their license online cannot. Install takes .apk files and split-APK bundles (.apkm, .xapk, .apks); game data (OBB) inside an .xapk is copied when Android allows it.</p>
 
 <script>
 (function () {
@@ -222,7 +222,7 @@
       apps.innerHTML = '<div class="sub">Looking for installed VR games…</div>';
       call('apps', {}, function (list) {
         apps.innerHTML = '';
-        if (!list || !list.length) { apps.innerHTML = '<div class="sub">No VR games installed yet. Use <b>Install APK…</b> to add one.</div>'; return; }
+        if (!list || !list.length) { apps.innerHTML = '<div class="sub">No VR games installed yet. Use <b>Install APK / APKM…</b> to add one (.apk, .apkm, .xapk or .apks).</div>'; return; }
         list.forEach(function (a) {
           var v = VERDICT[a.verdict] || VERDICT.unknown;
           var el = document.createElement('div');
@@ -269,6 +269,7 @@
     var onEvent = function (name, data) {
       if (name === 'installing') apps.insertAdjacentHTML('afterbegin', '<div class="sub">Installing… Android will ask you to confirm.</div>');
       if (name === 'installed') { if (data && data !== 'ok') alert('Install: ' + data); loadApps(); }
+      if (name === 'note') alert(data);
     };
     loadRuntime();
     loadApps();

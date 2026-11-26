@@ -50,7 +50,7 @@ jobs:
         run: rm -rf app/src/main/jniLibs app/src/main/assets/qemu
 
       - name: Build APKs
-        run: ./gradlew :app:assembleDebug :xr:assembleDebug
+        run: ./gradlew :xr:testDebugUnitTest :app:assembleDebug :xr:assembleDebug
 
       - name: Name the APKs
         run: |

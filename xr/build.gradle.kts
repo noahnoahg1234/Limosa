@@ -59,4 +59,5 @@ android {
 dependencies {
     // Document-start scripts (navigator.xr before any page code) and the https asset origin.
     implementation("androidx.webkit:webkit:1.12.1")
+    testImplementation("junit:junit:4.13.2")
 }

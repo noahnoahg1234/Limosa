@@ -1,7 +1,6 @@
 package com.limosa.xr
 
 import android.app.Activity
-import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -148,32 +147,21 @@ class NativeApps(private val context: Context) {
         pm.resolveContentProvider("org.khronos.openxr.runtime_broker", 0)?.packageName
     }.getOrNull()
 
-    /** Installs an APK picked with the file picker. Android asks the user to confirm. */
-    fun install(activity: Activity, uri: Uri): String? {
+    /**
+     * Installs an .apk, or a split-APK bundle (.apkm, .xapk, .apks), picked with the file picker.
+     * Android then asks the user to confirm.
+     */
+    fun install(activity: Activity, uri: Uri): BundleInstaller.Result {
         if (Build.VERSION.SDK_INT >= 26 && !pm.canRequestPackageInstalls()) {
             activity.startActivity(
                 Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
             )
-            return "Allow Limosa XR to install apps, then pick the APK again."
+            return BundleInstaller.Result("Allow Limosa XR to install apps, then pick the file again.")
         }
         return try {
-            val installer = pm.packageInstaller
-            val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
-            val id = installer.createSession(params)
-            installer.openSession(id).use { session ->
-                context.contentResolver.openInputStream(uri)!!.use { input ->
-                    session.openWrite("base.apk", 0, -1).use { out ->
-                        input.copyTo(out, 1 shl 20)
-                        session.fsync(out)
-                    }
-                }
-                val flags = PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
-                val pending = PendingIntent.getBroadcast(context, id, Intent(context, InstallReceiver::class.java), flags)
-                session.commit(pending.intentSender)
-            }
-            null
+            BundleInstaller(context).install(uri)
         } catch (t: Throwable) {
-            t.message ?: t.toString()
+            BundleInstaller.Result(t.message ?: t.toString())
         }
     }
 

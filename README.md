@@ -164,7 +164,12 @@ Limosa XR is an **OpenXR runtime** for Android (`xr/src/main/cpp`):
   - ✗ VrApi;
   - ✗ 32-bit only.
 
-  It also has **Install APK…**, **Play** and a **Runtime log** that games report into.
+  It also has **Install APK / APKM…**, **Play** and a **Runtime log** that games report into.
+- **Installing.** It takes plain `.apk` files and split-APK bundles: `.apkm` (APKMirror), `.xapk` (APKPure) and
+  `.apks` (SAI, bundletool). It installs the base and feature APKs, every language, and the splits for this phone's
+  processor type and screen density, like an app store would. OBB game data inside an `.xapk` is copied to
+  `Android/obb` when Android allows it; otherwise the app says where to copy it. APKMirror's old *encrypted*
+  `.apkm` files can't be read; download them again to get the current, unencrypted format.
 
 Limits:
 - Games that ship only a headset vendor's own loader can't find any other runtime. The same goes for old VrApi
