@@ -37,4 +37,4 @@ include(":core")
 val sdkConfigured = System.getenv("ANDROID_HOME") != null ||
     System.getenv("ANDROID_SDK_ROOT") != null ||
     file("local.properties").let { it.exists() && it.readText().contains("sdk.dir") }
-if (sdkConfigured) include(":app") else logger.lifecycle("No Android SDK found - building :core only")
+if (sdkConfigured) include(":app", ":xr") else logger.lifecycle("No Android SDK found - building :core only")

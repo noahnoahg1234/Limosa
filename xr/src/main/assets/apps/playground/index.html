@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>XR Playground</title>
+<style>
+  html, body { margin:0; height:100%; background:#10141b; color:#e9edf3; font:15px system-ui, sans-serif; overflow:hidden; }
+  canvas { display:block; width:100%; height:100%; }
+  #ui { position:fixed; left:0; right:0; bottom:24px; text-align:center; }
+  #enter { background:#7cc4ff; color:#06121d; border:0; border-radius:12px; padding:14px 28px; font-size:17px; font-weight:700; }
+  #msg { margin-top:8px; color:#9aa4b2; font-size:13px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">
+  <button id="enter">Enter VR</button>
+  <div id="msg">Grip (LG/RG) near a cube to grab and throw it · Trigger shoots · Left stick walks · Right stick turns · A resets</div>
+</div>
+<script>
+(function () {
+  'use strict';
+  // ------------------------------------------------------------ tiny mat4 (column-major) --
+  var M = {
+    ident: function () { return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]); },
+    mul: function (a, b) {
+      var o = new Float32Array(16);
+      for (var c = 0; c < 4; c++) for (var r = 0; r < 4; r++)
+        o[c*4+r] = a[r]*b[c*4] + a[4+r]*b[c*4+1] + a[8+r]*b[c*4+2] + a[12+r]*b[c*4+3];
+      return o;
+    },
+    trs: function (t, yaw, s) {
+      var c = Math.cos(yaw), n = Math.sin(yaw);
+      s = s || [1,1,1];
+      return new Float32Array([c*s[0],0,-n*s[0],0, 0,s[1],0,0, n*s[2],0,c*s[2],0, t[0],t[1],t[2],1]);
+    },
+    scale: function (s) { return new Float32Array([s[0],0,0,0, 0,s[1],0,0, 0,0,s[2],0, 0,0,0,1]); },
+    translate: function (t) { var m = M.ident(); m[12]=t[0]; m[13]=t[1]; m[14]=t[2]; return m; },
+    invert: function (m) {
+      var inv = new Float32Array(16), i;
+      inv[0]=m[5]*m[10]*m[15]-m[5]*m[11]*m[14]-m[9]*m[6]*m[15]+m[9]*m[7]*m[14]+m[13]*m[6]*m[11]-m[13]*m[7]*m[10];
+      inv[4]=-m[4]*m[10]*m[15]+m[4]*m[11]*m[14]+m[8]*m[6]*m[15]-m[8]*m[7]*m[14]-m[12]*m[6]*m[11]+m[12]*m[7]*m[10];
+      inv[8]=m[4]*m[9]*m[15]-m[4]*m[11]*m[13]-m[8]*m[5]*m[15]+m[8]*m[7]*m[13]+m[12]*m[5]*m[11]-m[12]*m[7]*m[9];
+      inv[12]=-m[4]*m[9]*m[14]+m[4]*m[10]*m[13]+m[8]*m[5]*m[14]-m[8]*m[6]*m[13]-m[12]*m[5]*m[10]+m[12]*m[6]*m[9];
+      inv[1]=-m[1]*m[10]*m[15]+m[1]*m[11]*m[14]+m[9]*m[2]*m[15]-m[9]*m[3]*m[14]-m[13]*m[2]*m[11]+m[13]*m[3]*m[10];
+      inv[5]=m[0]*m[10]*m[15]-m[0]*m[11]*m[14]-m[8]*m[2]*m[15]+m[8]*m[3]*m[14]+m[12]*m[2]*m[11]-m[12]*m[3]*m[10];
+      inv[9]=-m[0]*m[9]*m[15]+m[0]*m[11]*m[13]+m[8]*m[1]*m[15]-m[8]*m[3]*m[13]-m[12]*m[1]*m[11]+m[12]*m[3]*m[9];
+      inv[13]=m[0]*m[9]*m[14]-m[0]*m[10]*m[13]-m[8]*m[1]*m[14]+m[8]*m[2]*m[13]+m[12]*m[1]*m[10]-m[12]*m[2]*m[9];
+      inv[2]=m[1]*m[6]*m[15]-m[1]*m[7]*m[14]-m[5]*m[2]*m[15]+m[5]*m[3]*m[14]+m[13]*m[2]*m[7]-m[13]*m[3]*m[6];
+      inv[6]=-m[0]*m[6]*m[15]+m[0]*m[7]*m[14]+m[4]*m[2]*m[15]-m[4]*m[3]*m[14]-m[12]*m[2]*m[7]+m[12]*m[3]*m[6];
+      inv[10]=m[0]*m[5]*m[15]-m[0]*m[7]*m[13]-m[4]*m[1]*m[15]+m[4]*m[3]*m[13]+m[12]*m[1]*m[7]-m[12]*m[3]*m[5];
+      inv[14]=-m[0]*m[5]*m[14]+m[0]*m[6]*m[13]+m[4]*m[1]*m[14]-m[4]*m[2]*m[13]-m[12]*m[1]*m[6]+m[12]*m[2]*m[5];
+      inv[3]=-m[1]*m[6]*m[11]+m[1]*m[7]*m[10]+m[5]*m[2]*m[11]-m[5]*m[3]*m[10]-m[9]*m[2]*m[7]+m[9]*m[3]*m[6];
+      inv[7]=m[0]*m[6]*m[11]-m[0]*m[7]*m[10]-m[4]*m[2]*m[11]+m[4]*m[3]*m[10]+m[8]*m[2]*m[7]-m[8]*m[3]*m[6];
+      inv[11]=-m[0]*m[5]*m[11]+m[0]*m[7]*m[9]+m[4]*m[1]*m[11]-m[4]*m[3]*m[9]-m[8]*m[1]*m[7]+m[8]*m[3]*m[5];
+      inv[15]=m[0]*m[5]*m[10]-m[0]*m[6]*m[9]-m[4]*m[1]*m[10]+m[4]*m[2]*m[9]+m[8]*m[1]*m[6]-m[8]*m[2]*m[5];
+      var det = m[0]*inv[0]+m[1]*inv[4]+m[2]*inv[8]+m[3]*inv[12];
+      det = det ? 1/det : 0;
+      for (i = 0; i < 16; i++) inv[i] *= det;
+      return inv;
+    },
+    perspective: function (fovy, aspect, near, far) {
+      var f = 1/Math.tan(fovy/2), nf = 1/(near-far);
+      return new Float32Array([f/aspect,0,0,0, 0,f,0,0, 0,0,(far+near)*nf,-1, 0,0,2*far*near*nf,0]);
+    },
+  };
+
+  // ------------------------------------------------------------------- GL setup --
+  var canvas = document.getElementById('c');
+  var gl = canvas.getContext('webgl', { antialias: true, xrCompatible: true });
+  var vs = 'attribute vec3 p; attribute vec3 n; uniform mat4 P, V, W; varying vec3 vn; varying vec3 wp;' +
+    'void main(){ vec4 w = W*vec4(p,1.0); wp = w.xyz; vn = mat3(W)*n; gl_Position = P*V*w; }';
+  var fs = 'precision mediump float; uniform vec3 col; uniform float grid; varying vec3 vn; varying vec3 wp;' +
+    'void main(){ vec3 l = normalize(vec3(0.4,1.0,0.3)); float d = 0.35 + 0.65*max(dot(normalize(vn),l),0.0);' +
+    ' vec3 c = col;' +
+    ' if (grid > 0.5) { vec2 g = abs(fract(wp.xz) - 0.5); float line = step(0.48, max(g.x,g.y)); c = mix(c, vec3(0.45,0.75,1.0), line*0.6); }' +
+    ' gl_FragColor = vec4(c*d, 1.0); }';
+  function sh(type, src) { var s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; }
+  var prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, vs));
+  gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(prog);
+  var U = {}; ['P','V','W','col','grid'].forEach(function (k) { U[k] = gl.getUniformLocation(prog, k); });
+  var aP = gl.getAttribLocation(prog, 'p'), aN = gl.getAttribLocation(prog, 'n');
+
+  // Unit cube centred on the origin (36 vertices with normals).
+  var data = [];
+  var faces = [[0,0,1],[0,0,-1],[1,0,0],[-1,0,0],[0,1,0],[0,-1,0]];
+  faces.forEach(function (n) {
+    var u = n[1] !== 0 ? [1,0,0] : [0,1,0];
+    var v = [n[1]*u[2]-n[2]*u[1], n[2]*u[0]-n[0]*u[2], n[0]*u[1]-n[1]*u[0]];
+    var corners = [[-1,-1],[1,-1],[1,1],[-1,-1],[1,1],[-1,1]];
+    corners.forEach(function (c) {
+      data.push(0.5*(n[0]+c[0]*u[0]+c[1]*v[0]), 0.5*(n[1]+c[0]*u[1]+c[1]*v[1]), 0.5*(n[2]+c[0]*u[2]+c[1]*v[2]), n[0], n[1], n[2]);
+    });
+  });
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+
+  // ------------------------------------------------------------------- the world --
+  var cubes = [];
+  function resetCubes() {
+    cubes = [];
+    var colors = [[1,.55,.2],[.4,.85,.5],[.55,.6,1],[1,.4,.6],[.95,.85,.3],[.4,.9,.95]];
+    for (var i = 0; i < 6; i++) {
+      var a = -0.9 + i * 0.36;
+      cubes.push({ pos: [Math.sin(a)*1.1, 1.0, -Math.cos(a)*1.1], vel: [0,0,0], yaw: a, size: 0.18, col: colors[i], held: null });
+    }
+  }
+  resetCubes();
+  var player = { pos: [0, 0, 0], yaw: 0 };
+  var turnReady = true;
+  var lastYaw = 0;
+
+  function drawBox(m, col, grid) {
+    gl.uniformMatrix4fv(U.W, false, m);
+    gl.uniform3fv(U.col, col);
+    gl.uniform1f(U.grid, grid ? 1 : 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 36);
+  }
+  function drawScene(P, V, hands) {
+    gl.useProgram(prog);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.enableVertexAttribArray(aP); gl.vertexAttribPointer(aP, 3, gl.FLOAT, false, 24, 0);
+    gl.enableVertexAttribArray(aN); gl.vertexAttribPointer(aN, 3, gl.FLOAT, false, 24, 12);
+    gl.uniformMatrix4fv(U.P, false, P);
+    gl.uniformMatrix4fv(U.V, false, V);
+    drawBox(M.trs([0, -0.05, 0], 0, [40, 0.1, 40]), [0.13, 0.16, 0.22], true);      // floor
+    drawBox(M.trs([0, 0.4, -1.1], 0, [2.6, 0.8, 0.5]), [0.35, 0.27, 0.2]);              // table
+    drawBox(M.trs([-3, 1.5, -5], 0.3, [1, 3, 1]), [0.5, 0.5, 0.6]);                     // pillars
+    drawBox(M.trs([3, 1.5, -5], -0.3, [1, 3, 1]), [0.5, 0.5, 0.6]);
+    drawBox(M.trs([0, 0.5, 4], 0, [6, 1, 0.3]), [0.3, 0.35, 0.45]);
+    cubes.forEach(function (c) { drawBox(c.held ? M.mul(c.held.mat, c.held.rel) : M.trs(c.pos, c.yaw, [c.size, c.size, c.size]), c.col); });
+    (hands || []).forEach(function (h) {
+      var col = h.handedness === 'left' ? [0.45, 0.75, 1] : [1, 0.65, 0.35];
+      drawBox(M.mul(h.grip, M.scale([0.05, 0.05, 0.12])), col);
+      if (h.ray) drawBox(M.mul(h.ray, M.mul(M.translate([0, 0, -0.6]), M.scale([0.004, 0.004, 1.2]))), h.firing ? [1, 1, 0.4] : [0.9, 0.9, 0.9]);
+    });
+  }
+
+  // ------------------------------------------------------------------- physics --
+  function step(dt) {
+    cubes.forEach(function (c) {
+      if (c.held) return;
+      c.vel[1] -= 9.8 * dt;
+      for (var i = 0; i < 3; i++) c.pos[i] += c.vel[i] * dt;
+      var floor = c.size / 2;
+      // Table top.
+      if (Math.abs(c.pos[0]) < 1.3 && Math.abs(c.pos[2] + 1.1) < 0.25 && c.pos[1] < 0.8 + c.size / 2 && c.pos[1] > 0.6) floor = 0.8 + c.size / 2;
+      if (c.pos[1] < floor) {
+        c.pos[1] = floor;
+        c.vel[1] = Math.abs(c.vel[1]) > 1 ? -c.vel[1] * 0.35 : 0;
+        c.vel[0] *= 0.85; c.vel[2] *= 0.85;
+      }
+    });
+  }
+
+  // ------------------------------------------------------------------- inline preview --
+  var session = null, refBase = null, last = 0;
+  function preview(t) {
+    if (session) return;
+    var w = canvas.clientWidth * devicePixelRatio, h = canvas.clientHeight * devicePixelRatio;
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, w, h);
+    gl.clearColor(0.06, 0.08, 0.11, 1); gl.enable(gl.DEPTH_TEST);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    var a = t * 0.0002;
+    var eye = M.trs([Math.sin(a) * 2.4, 1.7, Math.cos(a) * 2.4 - 1], a, [1, 1, 1]);
+    var tilt = new Float32Array([1,0,0,0, 0,Math.cos(-0.35),Math.sin(-0.35),0, 0,-Math.sin(-0.35),Math.cos(-0.35),0, 0,0,0,1]);
+    drawScene(M.perspective(1.1, w / h, 0.05, 100), M.invert(M.mul(eye, tilt)));
+    var dt = Math.min(0.05, (t - last) / 1000 || 0); last = t; step(dt);
+    requestAnimationFrame(preview);
+  }
+  requestAnimationFrame(preview);
+
+  // ------------------------------------------------------------------- VR --
+  var enter = document.getElementById('enter');
+  var msg = document.getElementById('msg');
+  if (!navigator.xr) { enter.disabled = true; msg.textContent = 'WebXR is not available in this browser.'; }
+  else navigator.xr.isSessionSupported('immersive-vr').then(function (ok) { if (!ok) { enter.disabled = true; msg.textContent = 'VR is not supported here.'; } });
+
+  enter.onclick = function () {
+    navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor'] }).then(function (s) {
+      session = s;
+      window.__session = s;
+      s.updateRenderState({ baseLayer: new XRWebGLLayer(s, gl) });
+      s.requestReferenceSpace('local-floor').catch(function () { return s.requestReferenceSpace('local'); }).then(function (ref) {
+        refBase = ref;
+        s.requestAnimationFrame(onXRFrame);
+      });
+      s.addEventListener('end', function () { session = null; window.__session = null; requestAnimationFrame(preview); });
+      s.addEventListener('squeezestart', function (e) { grab(e.inputSource, e.frame); });
+      s.addEventListener('squeezeend', function (e) { drop(e.inputSource); });
+      s.addEventListener('selectstart', function (e) { shoot(e.inputSource, e.frame); });
+    });
+  };
+
+  var handState = {}; // per handedness: { grip, ray, prevPos, vel }
+  function rigRef() {
+    var c = Math.cos(player.yaw / 2), n = Math.sin(player.yaw / 2);
+    var rig = new XRRigidTransform({ x: player.pos[0], y: player.pos[1], z: player.pos[2] }, { x: 0, y: n, z: 0, w: c });
+    return refBase.getOffsetReferenceSpace(rig.inverse);
+  }
+  function pulse(src, v, ms) {
+    var g = src.gamepad;
+    var a = g && ((g.hapticActuators && g.hapticActuators[0]) || g.vibrationActuator);
+    if (a && a.pulse) a.pulse(v, ms);
+  }
+  function grab(src, frame) {
+    var hs = handState[src.handedness] || (handState[src.handedness] = {});
+    var gpose = frame.getPose(src.gripSpace, rigRef());
+    if (!gpose) return;
+    hs.grip = gpose.transform.matrix;
+    var gp = [hs.grip[12], hs.grip[13], hs.grip[14]];
+    var best = null, bd = 0.28;
+    cubes.forEach(function (c) {
+      if (c.held) return;
+      var d = Math.hypot(c.pos[0] - gp[0], c.pos[1] - gp[1], c.pos[2] - gp[2]);
+      if (d < bd) { bd = d; best = c; }
+    });
+    if (!best) return;
+    best.held = { hand: src.handedness, mat: hs.grip, rel: M.mul(M.invert(hs.grip), M.trs(best.pos, best.yaw, [best.size, best.size, best.size])) };
+    pulse(src, 0.6, 40);
+  }
+  function drop(src) {
+    var hs = handState[src.handedness];
+    cubes.forEach(function (c) {
+      if (!c.held || c.held.hand !== src.handedness) return;
+      var m = M.mul(c.held.mat, c.held.rel);
+      c.pos = [m[12], m[13], m[14]];
+      c.vel = hs && hs.vel ? hs.vel.slice() : [0, 0, 0];
+      c.held = null;
+    });
+  }
+  function shoot(src, frame) {
+    var hs = handState[src.handedness] || (handState[src.handedness] = {});
+    var rpose = frame.getPose(src.targetRaySpace, rigRef());
+    if (!rpose) return;
+    hs.ray = rpose.transform.matrix;
+    hs.firing = 6;
+    var o = [hs.ray[12], hs.ray[13], hs.ray[14]], d = [-hs.ray[8], -hs.ray[9], -hs.ray[10]];
+    var hit = null, ht = 50;
+    cubes.forEach(function (c) {
+      var oc = [c.pos[0] - o[0], c.pos[1] - o[1], c.pos[2] - o[2]];
+      var t = oc[0] * d[0] + oc[1] * d[1] + oc[2] * d[2];
+      if (t < 0) return;
+      var dist = Math.hypot(oc[0] - d[0] * t, oc[1] - d[1] * t, oc[2] - d[2] * t);
+      if (dist < c.size * 0.8 && t < ht) { ht = t; hit = c; }
+    });
+    pulse(src, hit ? 1 : 0.25, hit ? 60 : 20);
+    if (hit && !hit.held) {
+      hit.col = [Math.random() * 0.7 + 0.3, Math.random() * 0.7 + 0.3, Math.random() * 0.7 + 0.3];
+      hit.vel = [d[0] * 3, 2.5, d[2] * 3];
+    }
+    window.__hits = (window.__hits || 0) + (hit ? 1 : 0);
+  }
+
+  function onXRFrame(t, frame) {
+    var s = frame.session;
+    s.requestAnimationFrame(onXRFrame);
+    var dt = Math.min(0.05, (t - last) / 1000 || 0); last = t;
+
+    // Locomotion from the thumbsticks (xr-standard axes 2/3).
+    var a = 0;
+    for (var i = 0; i < s.inputSources.length; i++) {
+      var src = s.inputSources[i], gp = src.gamepad;
+      if (!gp) continue;
+      var x = gp.axes[2] || 0, y = gp.axes[3] || 0;
+      if (src.handedness === 'left' && (Math.abs(x) > 0.1 || Math.abs(y) > 0.1)) {
+        var c = Math.cos(lastYaw), n = Math.sin(lastYaw);
+        // Forward is -z in the player's (head) yaw.
+        player.pos[0] += (x * c + y * n) * 2 * dt;
+        player.pos[2] += (-x * n + y * c) * 2 * dt;
+      }
+      if (src.handedness === 'right') {
+        if (Math.abs(x) > 0.7 && turnReady) { player.yaw -= Math.sign(x) * Math.PI / 6; turnReady = false; }
+        if (Math.abs(x) < 0.3) turnReady = true;
+      }
+      if (src.handedness === 'right' && gp.buttons[4] && gp.buttons[4].pressed) { resetCubes(); player.pos = [0, 0, 0]; player.yaw = 0; }
+      a++;
+    }
+    var ref = rigRef();
+    var pose = frame.getViewerPose(ref);
+    if (pose) {
+      // Yaw of the view direction in the world, used to walk where you look.
+      var hm = pose.transform.matrix;
+      lastYaw = Math.atan2(hm[8], hm[10]);
+    }
+
+    var hands = [];
+    for (var j = 0; j < s.inputSources.length; j++) {
+      var is = s.inputSources[j];
+      var gpose = is.gripSpace && frame.getPose(is.gripSpace, ref);
+      var rpose = frame.getPose(is.targetRaySpace, ref);
+      if (!gpose) continue;
+      var hs = handState[is.handedness] || (handState[is.handedness] = {});
+      var m = gpose.transform.matrix;
+      if (hs.grip && dt > 0) hs.vel = [(m[12] - hs.grip[12]) / dt, (m[13] - hs.grip[13]) / dt, (m[14] - hs.grip[14]) / dt];
+      hs.grip = m;
+      hs.ray = rpose ? rpose.transform.matrix : null;
+      if (hs.firing) hs.firing--;
+      hands.push({ handedness: is.handedness, grip: m, ray: hs.ray, firing: hs.firing > 0 });
+      cubes.forEach(function (c) { if (c.held && c.held.hand === is.handedness) c.held.mat = m; });
+    }
+    step(dt);
+    window.__frames = (window.__frames || 0) + 1;
+
+    var layer = s.renderState.baseLayer;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+    gl.clearColor(0.06, 0.08, 0.11, 1);
+    gl.enable(gl.DEPTH_TEST);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    if (!pose) return;
+    pose.views.forEach(function (v) {
+      var vp = layer.getViewport(v);
+      gl.viewport(vp.x, vp.y, vp.width, vp.height);
+      drawScene(v.projectionMatrix, v.transform.inverse.matrix, hands);
+    });
+    void a;
+  }
+})();
+</script>
+</body>
+</html>

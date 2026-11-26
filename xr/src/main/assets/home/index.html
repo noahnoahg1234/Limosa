@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Limosa XR Home</title>
+<style>
+  :root { --bg:#0f1115; --card:#1b1f27; --card2:#242a35; --text:#e9edf3; --dim:#9aa4b2; --accent:#7cc4ff; --warn:#f6c177; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.4 system-ui, sans-serif; padding:16px 20px 40px; }
+  h1 { font-size:20px; margin:0 0 2px; }
+  h2 { font-size:14px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin:22px 0 10px; }
+  .sub { color:var(--dim); font-size:13px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); gap:12px; }
+  .card { background:var(--card); border-radius:14px; padding:14px; cursor:pointer; position:relative; border:1px solid transparent; }
+  .card:active { border-color:var(--accent); }
+  .card .t { font-weight:600; margin-bottom:4px; padding-right:18px; }
+  .card .d { color:var(--dim); font-size:12.5px; }
+  .card .x { position:absolute; right:8px; top:6px; color:var(--dim); font-size:18px; padding:2px 6px; }
+  .tag { display:inline-block; font-size:11px; padding:1px 7px; border-radius:10px; background:var(--card2); color:var(--accent); margin-top:6px; }
+  form { display:flex; gap:8px; flex-wrap:wrap; }
+  input[type=text], input[type=url] { flex:1 1 160px; background:var(--card); color:var(--text); border:1px solid #333a46; border-radius:10px; padding:10px 12px; font-size:15px; min-width:0; }
+  button { background:var(--accent); color:#06121d; border:0; border-radius:10px; padding:10px 16px; font-weight:600; font-size:14px; }
+  .settings { background:var(--card); border-radius:14px; padding:6px 14px; }
+  .row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:9px 0; border-bottom:1px solid #2a303b; }
+  .row:last-child { border-bottom:0; }
+  .row label { flex:1; }
+  .row small { display:block; color:var(--dim); }
+  .row output { width:52px; text-align:right; color:var(--accent); font-variant-numeric:tabular-nums; }
+  input[type=range] { width:150px; }
+  .help { background:var(--card); border-radius:14px; padding:12px 16px; color:var(--dim); font-size:13.5px; }
+  .help b { color:var(--text); }
+  .note { color:var(--warn); font-size:13px; }
+  .apps { display:flex; flex-direction:column; gap:8px; }
+  .app { background:var(--card); border-radius:12px; padding:10px 12px; display:flex; align-items:center; gap:12px; }
+  .app .info { flex:1; min-width:0; }
+  .app .n { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .app .s { font-size:12.5px; color:var(--dim); }
+  .app .d { font-size:11.5px; color:var(--dim); opacity:.8; overflow-wrap:anywhere; }
+  .ok { color:#8be28b; } .bad { color:#ff8f8f; } .maybe { color:var(--warn); }
+  .row2 { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+  .btn2 { background:var(--card2); color:var(--text); }
+  pre.log { background:#07090c; color:#b9c3cf; border-radius:10px; padding:10px; font-size:11.5px; max-height:260px; overflow:auto; white-space:pre-wrap; word-break:break-all; margin:8px 0 0; }
+  .status { font-size:13px; margin-bottom:10px; }
+</style>
+</head>
+<body>
+  <h1>Limosa XR</h1>
+  <div class="sub">A VR headset emulator. Native OpenXR games run with the on-screen controllers; WebXR apps run in the browser below (press their <b>Enter VR</b> button, or the one in the top bar).</div>
+
+  <div id="native" hidden>
+    <h2>Native VR games (APK)</h2>
+    <div class="status" id="rtstatus"></div>
+    <div class="row2">
+      <button type="button" id="installApk">Install APK / APKM…</button>
+      <button type="button" class="btn2" id="refreshApps">Refresh</button>
+      <button type="button" class="btn2" id="showLog">Runtime log</button>
+    </div>
+    <div class="row2" style="align-items:center">
+      <input type="text" id="appFilter" placeholder="Search installed apps" style="flex:1 1 160px">
+      <label style="color:var(--dim);display:inline-flex;gap:6px;align-items:center"><input type="checkbox" id="allApps"> Show all apps</label>
+    </div>
+    <div class="status" id="ctlstatus"></div>
+    <div class="apps" id="apps"><div class="sub">Looking for installed VR games…</div></div>
+    <div id="logbox" hidden>
+      <pre class="log" id="log"></pre>
+      <div class="row2" style="margin-top:8px"><button type="button" class="btn2" id="reloadLog">Reload</button><button type="button" class="btn2" id="clearLog">Clear</button></div>
+    </div>
+  </div>
+
+  <h2>Open a WebXR app</h2>
+  <form id="open">
+    <input type="url" id="url" placeholder="https://… (any WebXR site, or http://192.168.x.x:port for your dev server)" autocomplete="off">
+    <input type="text" id="name" placeholder="Name (to save it)" style="flex:0 1 160px">
+    <button type="submit">Open</button>
+    <button type="button" id="save" style="background:var(--card2);color:var(--text)">Save</button>
+  </form>
+
+  <h2>Your apps</h2>
+  <div class="grid" id="mine"></div>
+
+  <h2>Built in</h2>
+  <div class="grid" id="builtin"></div>
+
+  <h2>WebXR apps on the web</h2>
+  <div class="grid" id="web"></div>
+
+  <h2>Controls in VR</h2>
+  <div class="help">
+    <b>1 finger</b> on empty space: look around. <b>2 fingers</b>: the left finger moves the left controller, the right finger the right one.
+    Tap <b>Hand: Move</b> to switch fingers to <b>Depth</b> (push hands forward and back) or <b>Aim</b> (rotate the controllers).<br>
+    <b>LT / RT</b> are the triggers (select), <b>LG / RG</b> the grips (squeeze), <b>X Y A B</b> the face buttons. The circles at the
+    bottom are thumbsticks; a quick tap on a stick clicks it. <b>Gyro</b> lets you look around by moving the phone, <b>View: 3D</b>
+    switches to side-by-side stereo for a phone headset, <b>⟲ Center</b> resets the view and hands, the back button leaves VR.
+  </div>
+
+  <h2>Settings</h2>
+  <div class="settings" id="settings"></div>
+  <p class="note">Native games: Limosa XR is an OpenXR runtime. Games built with the standard Khronos OpenXR loader (many recent
+    Unity, Unreal and Godot games) can start with it. Games built only for one headset's own loader, old VrApi games, and store
+    games that check their license online cannot. Install takes .apk files and split-APK bundles (.apkm, .xapk, .apks); game data (OBB) inside an .xapk is copied when Android allows it.</p>
+
+<script>
+(function () {
+  var bridge = window.QuestXR;
+  var BUILTIN = [
+    { name: 'XR Playground', url: '../apps/playground/index.html', desc: 'Grab, throw and shoot cubes. Works offline; a quick test of every control.', tag: 'offline' },
+  ];
+  var WEB = [
+    { name: 'three.js: Ball shooter', url: 'https://threejs.org/examples/webxr_xr_ballshooter.html', desc: 'Pull the trigger to fire balls around a room.', tag: 'three.js' },
+    { name: 'three.js: Dragging', url: 'https://threejs.org/examples/webxr_xr_dragging.html', desc: 'Point at shapes and pick them up with the trigger.', tag: 'three.js' },
+    { name: 'three.js: Paint', url: 'https://threejs.org/examples/webxr_xr_paint.html', desc: 'Paint in the air while holding the trigger.', tag: 'three.js' },
+    { name: 'three.js: Roller coaster', url: 'https://threejs.org/examples/webxr_vr_rollercoaster.html', desc: 'Sit back and ride.', tag: 'three.js' },
+    { name: 'three.js: Teleport', url: 'https://threejs.org/examples/webxr_vr_teleport.html', desc: 'Aim at the floor and teleport with the trigger.', tag: 'three.js' },
+    { name: 'WebXR samples', url: 'https://immersive-web.github.io/webxr-samples/', desc: 'The official W3C Immersive Web sample collection.', tag: 'samples' },
+    { name: 'Moon Rider', url: 'https://moonrider.xyz/', desc: 'Rhythm game: hit the beats with your controllers.', tag: 'game' },
+    { name: 'A-Frame examples', url: 'https://aframe.io/examples/', desc: 'Scenes built with the A-Frame framework.', tag: 'A-Frame' },
+  ];
+  function load() { try { return JSON.parse(localStorage.getItem('apps') || '[]'); } catch (e) { return []; } }
+  function store(a) { try { localStorage.setItem('apps', JSON.stringify(a)); } catch (e) {} }
+  function card(app, removable, i) {
+    var el = document.createElement('div');
+    el.className = 'card';
+    el.innerHTML = '<div class="t"></div><div class="d"></div>' + (app.tag ? '<span class="tag"></span>' : '') + (removable ? '<span class="x" title="Remove">×</span>' : '');
+    el.querySelector('.t').textContent = app.name;
+    el.querySelector('.d').textContent = app.desc || app.url;
+    if (app.tag) el.querySelector('.tag').textContent = app.tag;
+    el.onclick = function (e) {
+      if (e.target.className === 'x') { var a = load(); a.splice(i, 1); store(a); render(); return; }
+      location.href = app.url;
+    };
+    return el;
+  }
+  function render() {
+    var mine = document.getElementById('mine');
+    mine.innerHTML = '';
+    var apps = load();
+    if (!apps.length) mine.innerHTML = '<div class="sub">Saved apps show up here.</div>';
+    apps.forEach(function (a, i) { mine.appendChild(card(a, true, i)); });
+    ['builtin', 'web'].forEach(function (id) {
+      var g = document.getElementById(id);
+      g.innerHTML = '';
+      (id === 'builtin' ? BUILTIN : WEB).forEach(function (a) { g.appendChild(card(a, false)); });
+    });
+  }
+  function normalize(u) {
+    u = u.trim();
+    if (!u) return '';
+    if (!/^[a-z]+:\/\//i.test(u)) u = (/^(localhost|\d+\.\d+\.\d+\.\d+)/.test(u) ? 'http://' : 'https://') + u;
+    return u;
+  }
+  document.getElementById('open').onsubmit = function (e) {
+    e.preventDefault();
+    var u = normalize(document.getElementById('url').value);
+    if (u) location.href = u;
+  };
+  document.getElementById('save').onclick = function () {
+    var u = normalize(document.getElementById('url').value);
+    if (!u) return;
+    var n = document.getElementById('name').value.trim() || u.replace(/^https?:\/\//, '');
+    var a = load(); a.push({ name: n, url: u }); store(a); render();
+    document.getElementById('url').value = ''; document.getElementById('name').value = '';
+  };
+
+  // Settings live in the app (SharedPreferences) so they apply to every site.
+  var S = {};
+  try { S = bridge ? JSON.parse(bridge.settings()) : {}; } catch (e) {}
+  var defs = [
+    { k: 'questUserAgent', type: 'bool', label: 'Report a VR headset browser', help: 'Some sites only offer VR to headset browsers. Reload the page after changing.' },
+    { k: 'gyro', type: 'bool', label: 'Look around with the gyro', help: S.gyroAvailable === false ? 'This phone has no rotation sensor.' : 'Move the phone to look. You can also toggle it in VR.' },
+    { k: 'stereo', type: 'bool', label: 'Side-by-side 3D', help: 'For phone VR headsets. Flat view is easier to play on a screen.' },
+    { k: 'eyeHeight', type: 'range', label: 'Eye height', min: 0.8, max: 2.1, step: 0.05, unit: ' m' },
+    { k: 'fov', type: 'range', label: 'Field of view', min: 50, max: 110, step: 1, unit: '°' },
+    { k: 'ipd', type: 'range', label: 'Eye distance (3D)', min: 0.05, max: 0.075, step: 0.001, unit: '', fmt: function (v) { return Math.round(v * 1000) + ' mm'; } },
+    { k: 'renderScale', type: 'range', label: 'Render resolution', min: 0.25, max: 1, step: 0.05, fmt: function (v) { return Math.round(v * 100) + '%'; }, help: 'Lower it if apps run slowly.' },
+  ];
+  var box = document.getElementById('settings');
+  defs.forEach(function (d) {
+    var row = document.createElement('div');
+    row.className = 'row';
+    var lab = document.createElement('label');
+    lab.textContent = d.label;
+    if (d.help) { var sm = document.createElement('small'); sm.textContent = d.help; lab.appendChild(sm); }
+    row.appendChild(lab);
+    var input = document.createElement('input');
+    if (d.type === 'bool') {
+      input.type = 'checkbox';
+      input.checked = !!S[d.k];
+      input.onchange = function () { bridge && bridge.setSetting(d.k, String(input.checked)); };
+      row.appendChild(input);
+    } else {
+      input.type = 'range'; input.min = d.min; input.max = d.max; input.step = d.step;
+      input.value = S[d.k] !== undefined ? S[d.k] : d.min;
+      var out = document.createElement('output');
+      var show = function () { var v = parseFloat(input.value); out.textContent = d.fmt ? d.fmt(v) : (Math.round(v * 100) / 100) + (d.unit || ''); };
+      show();
+      input.oninput = show;
+      input.onchange = function () { bridge && bridge.setSetting(d.k, input.value); };
+      row.appendChild(input);
+      row.appendChild(out);
+    }
+    box.appendChild(row);
+  });
+  if (!bridge) box.innerHTML = '<div class="row"><label>Settings are available inside the Limosa XR app.</label></div>';
+  render();
+
+  // ---- Native games: talks to the app over a channel only this page can use.
+  var home = window.limosaHome;
+  if (home) {
+    document.getElementById('native').hidden = false;
+    var seq = 0, waiting = {};
+    home.onmessage = function (e) {
+      var m; try { m = JSON.parse(e.data); } catch (err) { return; }
+      if (m.event) { onEvent(m.event, m.data); return; }
+      var cb = waiting[m.id]; delete waiting[m.id];
+      if (cb) cb(m.result);
+    };
+    var call = function (cmd, args, cb) { var id = ++seq; waiting[id] = cb || function () {}; home.postMessage(JSON.stringify({ id: id, cmd: cmd, args: args || {} })); };
+    var VERDICT = {
+      'compatible': ['ok', 'Uses the standard OpenXR loader: should start with Limosa XR'],
+      'unknown': ['maybe', 'No OpenXR loader found in the APK: may not be a native VR game'],
+      'headset-loader': ['bad', 'Uses a headset-only OpenXR loader: it cannot find Limosa XR'],
+      'vrapi': ['bad', 'Uses the old VrApi instead of OpenXR: not supported'],
+      'wrong-abi': ['bad', 'Built for a different processor type (e.g. 32-bit only)'],
+      'ovrplugin': ['bad', "Uses Meta's OVRPlugin without its own OpenXR loader: it only talks to Meta's headset software"],
+      'flat': ['maybe', 'No VR parts found: this looks like a normal phone app (for example the phone version of a game)'],
+    };
+    var appList = [];
+    var apps = document.getElementById('apps');
+    var filterEl = document.getElementById('appFilter'), allEl = document.getElementById('allApps');
+    var renderApps = function () {
+      var q = filterEl.value.trim().toLowerCase();
+      var list = appList.filter(function (a) { return !q || a.name.toLowerCase().indexOf(q) >= 0 || a.pkg.toLowerCase().indexOf(q) >= 0; });
+      apps.innerHTML = '';
+      if (!list.length) {
+        apps.innerHTML = '<div class="sub">' + (appList.length ? 'No app matches.' + (allEl.checked ? '' : ' Turn on <b>Show all apps</b> to search everything installed.') :
+          allEl.checked ? 'No apps found.' : 'No VR games found. Turn on <b>Show all apps</b> to see everything installed, or use <b>Install APK / APKM…</b>.') + '</div>';
+        return;
+      }
+      list.forEach(function (a) {
+        var v = VERDICT[a.verdict] || VERDICT.unknown;
+        var el = document.createElement('div');
+        el.className = 'app';
+        el.innerHTML = '<div class="info"><div class="n"></div><div class="s"></div><div class="d"></div></div>' +
+          '<button type="button" class="btn2 ctl" title="Open with the controller over it">🎮 Controls</button><button type="button" class="play"></button>';
+        el.querySelector('.n').textContent = a.name;
+        var st = el.querySelector('.s');
+        st.className = 's ' + v[0];
+        st.textContent = v[1];
+        var details = a.pkg;
+        if (a.signals && a.signals.length) details += ' · found: ' + a.signals.join(', ');
+        if (a.abis && a.abis.length) details += ' · ' + a.abis.join('/');
+        if (a.scanError) details += ' · could not read the APK: ' + a.scanError;
+        el.querySelector('.d').textContent = details;
+        var b = el.querySelector('button.play');
+        el.querySelector('button.ctl').onclick = function () {
+          call('playWithControls', { pkg: a.pkg }, function (err) { if (err) { alert(err); loadControls(); } });
+        };
+        b.textContent = a.verdict === 'compatible' || a.verdict === 'unknown' ? 'Play' : 'Try anyway';
+        if (a.verdict !== 'compatible' && a.verdict !== 'unknown') b.className = 'btn2';
+        if (!a.launchable) { b.disabled = true; b.textContent = 'No launcher'; }
+        b.onclick = function () { call('launch', { pkg: a.pkg }, function (err) { if (err) alert(err); }); };
+        apps.appendChild(el);
+      });
+    };
+    var loadApps = function () {
+      apps.innerHTML = '<div class="sub">Looking at installed apps…</div>';
+      call('apps', { all: allEl.checked }, function (list) { appList = list || []; renderApps(); });
+    };
+    filterEl.oninput = renderApps;
+    allEl.onchange = loadApps;
+    // ---- Controls over any app (Shizuku).
+    var ctl = document.getElementById('ctlstatus');
+    var loadControls = function () {
+      call('controlsState', {}, function (st) {
+        if (!st) return;
+        ctl.innerHTML = '';
+        var ready = st.overlay && st.shizukuRunning && st.permission;
+        var head = document.createElement('div');
+        head.className = ready ? 'ok' : 'maybe';
+        head.textContent = ready ? '🎮 Controls over any app are ready: tap 🎮 Controls next to an app.'
+          : '🎮 Controls over any app (games, phone VR apps) need a one-time setup:';
+        ctl.appendChild(head);
+        if (ready) return;
+        var steps = [
+          [st.overlay, 'Allow "display over other apps"', 'overlay'],
+          [st.shizukuInstalled, 'Install Shizuku (free)', 'getShizuku'],
+          [st.shizukuRunning, 'Start Shizuku (with Wireless debugging; again after each reboot)', 'openShizuku'],
+          [st.permission, 'Allow Limosa XR in Shizuku', 'permission'],
+        ];
+        steps.forEach(function (s, i) {
+          var row = document.createElement('div');
+          row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:6px';
+          var label = document.createElement('span');
+          label.className = s[0] ? 'ok' : '';
+          label.style.flex = '1';
+          label.textContent = (s[0] ? '✓ ' : (i + 1) + '. ') + s[1];
+          row.appendChild(label);
+          if (!s[0]) {
+            var b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'btn2';
+            b.textContent = 'Do it';
+            b.onclick = function () { call('controlsSetup', { step: s[2] }, function (err) { if (err) alert(err); setTimeout(loadControls, 800); }); };
+            row.appendChild(b);
+          }
+          ctl.appendChild(row);
+        });
+      });
+    };
+    var rt = document.getElementById('rtstatus');
+    var loadRuntime = function () {
+      call('runtime', {}, function (r) {
+        if (!r) return;
+        rt.innerHTML = '';
+        var line = document.createElement('div');
+        if (!r.libPresent) { line.className = 'bad'; line.textContent = 'The runtime library is missing from this build of Limosa XR.'; }
+        else if (!r.isOurs) { line.className = 'bad'; line.textContent = 'Another app (' + (r.brokerOwner || 'unknown') + ') is the OpenXR runtime broker. Uninstall it so games find Limosa XR.'; }
+        else if (!r.enabled) { line.className = 'maybe'; line.textContent = 'The Limosa XR OpenXR runtime is turned off.'; }
+        else { line.className = 'ok'; line.textContent = 'Limosa XR is the OpenXR runtime for native games (' + r.abi + ').'; }
+        rt.appendChild(line);
+        var lab = document.createElement('label');
+        lab.style.cssText = 'display:inline-flex;gap:8px;align-items:center;margin-top:6px;color:var(--dim)';
+        lab.innerHTML = '<input type="checkbox"> Use Limosa XR as the OpenXR runtime';
+        var cb = lab.querySelector('input');
+        cb.checked = !!r.enabled;
+        cb.onchange = function () { call('setRuntimeEnabled', { on: cb.checked }, loadRuntime); };
+        rt.appendChild(lab);
+      });
+    };
+    var logbox = document.getElementById('logbox'), logEl = document.getElementById('log');
+    var loadLog = function () { call('log', {}, function (t) { logEl.textContent = t || 'Nothing yet. Start a game and come back.'; logEl.scrollTop = logEl.scrollHeight; }); };
+    document.getElementById('showLog').onclick = function () { logbox.hidden = !logbox.hidden; if (!logbox.hidden) loadLog(); };
+    document.getElementById('reloadLog').onclick = loadLog;
+    document.getElementById('clearLog').onclick = function () { call('clearLog', {}, loadLog); };
+    document.getElementById('refreshApps').onclick = function () { loadApps(); loadRuntime(); };
+    document.getElementById('installApk').onclick = function () { call('install'); };
+    var onEvent = function (name, data) {
+      if (name === 'installing') apps.insertAdjacentHTML('afterbegin', '<div class="sub">Installing… Android will ask you to confirm.</div>');
+      if (name === 'installed') { if (data && data !== 'ok') alert('Install: ' + data); loadApps(); }
+      if (name === 'note') alert(data);
+      if (name === 'controls') loadControls();
+    };
+    loadRuntime();
+    loadControls();
+    loadApps();
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) { loadApps(); loadRuntime(); loadControls(); } });
+  }
+})();
+</script>
+</body>
+</html>
