@@ -213,7 +213,7 @@ class MainActivity : Activity(), ControllerOverlay.Listener {
             runCatching { reply.postMessage(JSONObject().put("id", id).put("result", result ?: JSONObject.NULL).toString()) }
         }
         when (msg.optString("cmd")) {
-            "apps" -> io.execute { answer(runCatching { nativeApps.list() }.getOrElse { JSONArray() }) }
+            "apps" -> io.execute { answer(runCatching { nativeApps.list(args.optBoolean("all")) }.getOrElse { JSONArray() }) }
             "launch" -> answer(nativeApps.launch(this, args.optString("pkg")))
             "install" -> {
                 @Suppress("DEPRECATION")

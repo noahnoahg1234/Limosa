@@ -22,8 +22,11 @@ import java.util.zip.ZipFile
 class NativeApps(private val context: Context) {
     private val pm = context.packageManager
 
-    /** Installed apps that look like VR games, as JSON for the home page. Slow: call off the UI thread. */
-    fun list(): JSONArray {
+    /**
+     * Installed apps as JSON for the home page: the ones that look like VR games, or with
+     * [all] every app the user installed, each with what the scan found. Slow: call off the UI thread.
+     */
+    fun list(all: Boolean = false): JSONArray {
         val vrActivities = HashSet<String>()
         for (cat in VR_CATEGORIES) {
             val i = Intent(Intent.ACTION_MAIN).addCategory(cat)
@@ -36,20 +39,27 @@ class NativeApps(private val context: Context) {
             if (app.packageName == context.packageName) continue
             val system = app.flags and ApplicationInfo.FLAG_SYSTEM != 0 && app.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP == 0
             if (system) continue
-            val meta = app.metaData
-            val vrMeta = meta != null && (meta.containsKey("com.oculus.supportedDevices") || meta.containsKey("com.oculus.vr.focusaware") ||
-                meta.containsKey("com.oculus.intent.category.VR") || meta.containsKey("pvr.app.type"))
+            val signals = ArrayList<String>()
+            app.metaData?.let { meta ->
+                for (k in VR_META_KEYS) if (meta.containsKey(k)) signals.add(k)
+            }
+            if (app.packageName in vrActivities) signals.add("VR launch category")
             val scan = scanApk(app)
-            if (!vrMeta && app.packageName !in vrActivities && scan.loader == Loader.NONE && !scan.vrapi) continue
+            signals.addAll(scan.libs)
+            val looksVr = signals.isNotEmpty()
+            if (!looksVr && !all) continue
+            val launchable = launchIntent(app.packageName) != null
+            if (!looksVr && !launchable) continue
             out.add(JSONObject().apply {
                 put("pkg", app.packageName)
                 put("name", pm.getApplicationLabel(app).toString())
                 put("loader", scan.loader.name.lowercase())
-                put("vrapi", scan.vrapi)
                 put("abis", JSONArray(scan.abis.toList()))
-                put("arm64", scan.abis.isEmpty() || Build.SUPPORTED_ABIS.firstOrNull() in scan.abis)
-                put("verdict", verdict(scan))
-                put("launchable", launchIntent(app.packageName) != null)
+                put("signals", JSONArray(signals))
+                put("verdict", verdict(scan, looksVr))
+                put("vr", looksVr)
+                put("launchable", launchable)
+                put("scanError", scan.error ?: JSONObject.NULL)
             })
         }
         out.sortWith(compareBy({ verdictRank(it.getString("verdict")) }, { it.getString("name").lowercase() }))
@@ -58,15 +68,17 @@ class NativeApps(private val context: Context) {
 
     enum class Loader { NONE, KHRONOS, OTHER }
 
-    private class Scan(val loader: Loader, val vrapi: Boolean, val abis: Set<String>)
+    private class Scan(val loader: Loader, val libs: List<String>, val abis: Set<String>, val error: String?)
 
-    private fun verdict(s: Scan): String {
+    private fun verdict(s: Scan, looksVr: Boolean): String {
         val abi = Build.SUPPORTED_ABIS.firstOrNull()
         return when {
             s.abis.isNotEmpty() && abi !in s.abis -> "wrong-abi"
             s.loader == Loader.KHRONOS -> "compatible"
             s.loader == Loader.OTHER -> "headset-loader"
-            s.vrapi -> "vrapi"
+            "libOVRPlugin.so" in s.libs -> "ovrplugin"
+            "libvrapi.so" in s.libs -> "vrapi"
+            !looksVr -> "flat"
             else -> "unknown"
         }
     }
@@ -74,18 +86,20 @@ class NativeApps(private val context: Context) {
     private fun verdictRank(v: String) = when (v) {
         "compatible" -> 0
         "unknown" -> 1
+        "flat" -> 3
         else -> 2
     }
 
-    /** Looks inside the APK (and its splits) for the OpenXR loader and old VrApi libraries. */
+    /** Looks inside the APK (and its splits) for the OpenXR loader and other VR libraries. */
     private fun scanApk(app: ApplicationInfo): Scan {
         val files = listOfNotNull(app.sourceDir) + (app.splitSourceDirs?.toList() ?: emptyList())
         var loader = Loader.NONE
-        var vrapi = false
+        val libs = LinkedHashSet<String>()
         val abis = HashSet<String>()
         val primary = Build.SUPPORTED_ABIS.firstOrNull()
+        var error: String? = null
         for (path in files) {
-            runCatching {
+            try {
                 ZipFile(path).use { zip ->
                     val entries = zip.entries()
                     var loaderEntry: java.util.zip.ZipEntry? = null
@@ -95,22 +109,27 @@ class NativeApps(private val context: Context) {
                         if (!n.startsWith("lib/") || !n.endsWith(".so")) continue
                         val abi = n.substring(4).substringBefore('/')
                         abis.add(abi)
-                        if (n.endsWith("/libopenxr_loader.so") && (loaderEntry == null || abi == primary)) loaderEntry = e
-                        if (n.endsWith("/libvrapi.so")) vrapi = true
+                        val file = n.substringAfterLast('/')
+                        if (file in VR_LIBS) libs.add(file)
+                        if (file == "libopenxr_loader.so" && (loaderEntry == null || abi == primary)) loaderEntry = e
                     }
                     loaderEntry?.let { e ->
                         val bytes = zip.getInputStream(e).use { it.readBytes() }
                         loader = if (contains(bytes, BROKER_MARKER)) Loader.KHRONOS else Loader.OTHER
                     }
                 }
+            } catch (t: Throwable) {
+                error = t.toString()
             }
         }
         // Libraries may also have been extracted on install.
+        val libDir = File(app.nativeLibraryDir ?: "")
+        libDir.list()?.forEach { if (it in VR_LIBS) libs.add(it) }
         if (loader == Loader.NONE) {
-            val f = File(app.nativeLibraryDir ?: "", "libopenxr_loader.so")
-            if (f.exists()) loader = if (contains(f.readBytes(), BROKER_MARKER)) Loader.KHRONOS else Loader.OTHER
+            val f = File(libDir, "libopenxr_loader.so")
+            if (f.exists()) loader = runCatching { if (contains(f.readBytes(), BROKER_MARKER)) Loader.KHRONOS else Loader.OTHER }.getOrDefault(Loader.OTHER)
         }
-        return Scan(loader, vrapi, abis)
+        return Scan(loader, libs.toList(), abis, error)
     }
 
     private fun contains(hay: ByteArray, needle: ByteArray): Boolean {
@@ -167,6 +186,15 @@ class NativeApps(private val context: Context) {
 
     companion object {
         val VR_CATEGORIES = listOf("org.khronos.openxr.intent.category.IMMERSIVE_HMD", "com.oculus.intent.category.VR")
+        private val VR_META_KEYS = listOf(
+            "com.oculus.supportedDevices", "com.oculus.vr.focusaware", "com.oculus.intent.category.VR",
+            "com.oculus.handtracking.version", "com.samsung.android.vr.application.mode", "pvr.app.type", "pico.vr.mode",
+        )
+        /** Libraries that only VR apps carry. */
+        private val VR_LIBS = setOf(
+            "libopenxr_loader.so", "libOVRPlugin.so", "libvrapi.so", "libUnityOpenXR.so", "libopenxr_forwardloader.so",
+            "libOculusXRPlugin.so", "libovrplatformloader.so", "libpxr_api.so", "libPxrPlatform.so", "libgodot_openxr.so",
+        )
         private val BROKER_MARKER = "org.khronos.openxr.runtime_broker".toByteArray()
         /** Set by MainActivity to refresh the home page when an install finishes. */
         @Volatile var onInstalled: ((String) -> Unit)? = null

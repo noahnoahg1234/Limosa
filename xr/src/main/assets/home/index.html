@@ -36,6 +36,7 @@
   .app .info { flex:1; min-width:0; }
   .app .n { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .app .s { font-size:12.5px; color:var(--dim); }
+  .app .d { font-size:11.5px; color:var(--dim); opacity:.8; overflow-wrap:anywhere; }
   .ok { color:#8be28b; } .bad { color:#ff8f8f; } .maybe { color:var(--warn); }
   .row2 { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
   .btn2 { background:var(--card2); color:var(--text); }
@@ -54,6 +55,10 @@
       <button type="button" id="installApk">Install APK / APKM…</button>
       <button type="button" class="btn2" id="refreshApps">Refresh</button>
       <button type="button" class="btn2" id="showLog">Runtime log</button>
+    </div>
+    <div class="row2" style="align-items:center">
+      <input type="text" id="appFilter" placeholder="Search installed apps" style="flex:1 1 160px">
+      <label style="color:var(--dim);display:inline-flex;gap:6px;align-items:center"><input type="checkbox" id="allApps"> Show all apps</label>
     </div>
     <div class="apps" id="apps"><div class="sub">Looking for installed VR games…</div></div>
     <div id="logbox" hidden>
@@ -216,29 +221,49 @@
       'headset-loader': ['bad', 'Uses a headset-only OpenXR loader: it cannot find Limosa XR'],
       'vrapi': ['bad', 'Uses the old VrApi instead of OpenXR: not supported'],
       'wrong-abi': ['bad', 'Built for a different processor type (e.g. 32-bit only)'],
+      'ovrplugin': ['bad', "Uses Meta's OVRPlugin without its own OpenXR loader: it only talks to Meta's headset software"],
+      'flat': ['maybe', 'No VR parts found: this looks like a normal phone app (for example the phone version of a game)'],
     };
+    var appList = [];
     var apps = document.getElementById('apps');
-    var loadApps = function () {
-      apps.innerHTML = '<div class="sub">Looking for installed VR games…</div>';
-      call('apps', {}, function (list) {
-        apps.innerHTML = '';
-        if (!list || !list.length) { apps.innerHTML = '<div class="sub">No VR games installed yet. Use <b>Install APK / APKM…</b> to add one (.apk, .apkm, .xapk or .apks).</div>'; return; }
-        list.forEach(function (a) {
-          var v = VERDICT[a.verdict] || VERDICT.unknown;
-          var el = document.createElement('div');
-          el.className = 'app';
-          el.innerHTML = '<div class="info"><div class="n"></div><div class="s"></div></div><button type="button">Play</button>';
-          el.querySelector('.n').textContent = a.name;
-          var st = el.querySelector('.s');
-          st.className = 's ' + v[0];
-          st.textContent = v[1];
-          var b = el.querySelector('button');
-          if (!a.launchable) { b.disabled = true; b.textContent = 'No launcher'; }
-          b.onclick = function () { call('launch', { pkg: a.pkg }, function (err) { if (err) alert(err); }); };
-          apps.appendChild(el);
-        });
+    var filterEl = document.getElementById('appFilter'), allEl = document.getElementById('allApps');
+    var renderApps = function () {
+      var q = filterEl.value.trim().toLowerCase();
+      var list = appList.filter(function (a) { return !q || a.name.toLowerCase().indexOf(q) >= 0 || a.pkg.toLowerCase().indexOf(q) >= 0; });
+      apps.innerHTML = '';
+      if (!list.length) {
+        apps.innerHTML = '<div class="sub">' + (appList.length ? 'No app matches.' + (allEl.checked ? '' : ' Turn on <b>Show all apps</b> to search everything installed.') :
+          allEl.checked ? 'No apps found.' : 'No VR games found. Turn on <b>Show all apps</b> to see everything installed, or use <b>Install APK / APKM…</b>.') + '</div>';
+        return;
+      }
+      list.forEach(function (a) {
+        var v = VERDICT[a.verdict] || VERDICT.unknown;
+        var el = document.createElement('div');
+        el.className = 'app';
+        el.innerHTML = '<div class="info"><div class="n"></div><div class="s"></div><div class="d"></div></div><button type="button"></button>';
+        el.querySelector('.n').textContent = a.name;
+        var st = el.querySelector('.s');
+        st.className = 's ' + v[0];
+        st.textContent = v[1];
+        var details = a.pkg;
+        if (a.signals && a.signals.length) details += ' · found: ' + a.signals.join(', ');
+        if (a.abis && a.abis.length) details += ' · ' + a.abis.join('/');
+        if (a.scanError) details += ' · could not read the APK: ' + a.scanError;
+        el.querySelector('.d').textContent = details;
+        var b = el.querySelector('button');
+        b.textContent = a.verdict === 'compatible' || a.verdict === 'unknown' ? 'Play' : 'Try anyway';
+        if (a.verdict !== 'compatible' && a.verdict !== 'unknown') b.className = 'btn2';
+        if (!a.launchable) { b.disabled = true; b.textContent = 'No launcher'; }
+        b.onclick = function () { call('launch', { pkg: a.pkg }, function (err) { if (err) alert(err); }); };
+        apps.appendChild(el);
       });
     };
+    var loadApps = function () {
+      apps.innerHTML = '<div class="sub">Looking at installed apps…</div>';
+      call('apps', { all: allEl.checked }, function (list) { appList = list || []; renderApps(); });
+    };
+    filterEl.oninput = renderApps;
+    allEl.onchange = loadApps;
     var rt = document.getElementById('rtstatus');
     var loadRuntime = function () {
       call('runtime', {}, function (r) {
