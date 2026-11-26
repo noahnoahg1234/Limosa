@@ -15,9 +15,9 @@ class XrState {
         val pos = defaultPos()
         var pitch = 0f
         var yaw = 0f
-        /** xr-standard order: trigger, squeeze, touchpad, thumbstick, A/X, B/Y, thumbrest. */
-        val buttons = FloatArray(7)
-        val touched = BooleanArray(7)
+        /** xr-standard order: trigger, squeeze, touchpad, thumbstick, A/X, B/Y, thumbrest, then menu (native games only). */
+        val buttons = FloatArray(8)
+        val touched = BooleanArray(8)
         var stickX = 0f
         var stickY = 0f
 
@@ -41,7 +41,7 @@ class XrState {
     var eyeHeight = 1.6f
     var stereo = false
     var ipd = 0.063f
-    var fovDegrees = 80f
+    var fovDegrees = 70f
     var renderScale = 1f
 
     @Synchronized
@@ -77,6 +77,32 @@ class XrState {
         return sb.append('}').toString()
     }
 
+    /**
+     * The state for the native OpenXR runtime (see inputFromFloats in runtime.cpp):
+     * head quaternion, eye height, stereo, ipd, fov, render scale, then per hand
+     * position (3), pitch, yaw, buttons (8), touched (8), stick (2).
+     */
+    @Synchronized
+    fun toFloats(out: FloatArray) {
+        val q = headQuat()
+        q.copyInto(out, 0)
+        out[4] = eyeHeight
+        out[5] = if (stereo) 1f else 0f
+        out[6] = ipd
+        out[7] = fovDegrees
+        out[8] = renderScale
+        for ((i, h) in listOf(left, right).withIndex()) {
+            val b = 9 + i * 23
+            h.pos.copyInto(out, b)
+            out[b + 3] = h.pitch
+            out[b + 4] = h.yaw
+            h.buttons.copyInto(out, b + 5)
+            for (k in 0 until 8) out[b + 13 + k] = if (h.touched[k]) 1f else 0f
+            out[b + 21] = h.stickX
+            out[b + 22] = h.stickY
+        }
+    }
+
     private fun hand(sb: StringBuilder, h: Hand) {
         sb.append("{\"p\":[").append(h.pos[0]).append(',').append(h.pos[1]).append(',').append(h.pos[2]).append(']')
         sb.append(",\"r\":[").append(h.pitch).append(',').append(h.yaw).append(']')
@@ -101,6 +127,7 @@ class XrState {
             a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
         )
 
+        const val FLOATS = 9 + 2 * 23
         const val MAX_PITCH = (PI / 2 * 0.95).toFloat()
     }
 }

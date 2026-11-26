@@ -14,7 +14,30 @@ android {
         // CI passes its run number so each published APK upgrades the previous one.
         val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
         versionCode = build
-        versionName = "0.1.$build"
+        versionName = "0.2.$build"
+        ndk {
+            // Headset games are arm64; x86_64 is for emulators.
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
+        externalNativeBuild {
+            cmake {
+                // Games load the runtime into their own process: keep our C++ library private.
+                arguments += listOf("-DANDROID_STL=c++_static")
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+        }
+    }
+
+    packaging {
+        jniLibs {
+            // The OpenXR loader in each game opens the runtime by file path, so it must be extracted.
+            useLegacyPackaging = true
+        }
     }
 
     buildTypes {

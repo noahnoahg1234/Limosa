@@ -136,33 +136,70 @@ Every request needs the token: the `limosa` cookie (set when you open `/?t=<toke
 
 ## Limosa XR: VR headset emulator
 
-`xr/` is a second app, **Limosa XR**. It runs WebXR VR apps on a phone as if the phone were a standalone
-VR headset with two touch controllers. On a real headset these apps run in the headset's browser.
+`xr/` is a second app, **Limosa XR**. It turns a phone into an emulated standalone VR headset with two
+Touch-style controllers. You play with transparent on-screen controls. It runs two kinds of VR software:
 
-- **WebXR emulation.** `xr/src/main/assets/xr/webxr-emulator.js` is injected before any page script, in
-  every frame. It provides `navigator.xr` (`immersive-vr` and `inline`) with reference spaces
-  (`local`, `local-floor`, `bounded-floor`, `unbounded`), `XRWebGLLayer`, and two `tracked-pointer` controllers.
-  The controllers use the `xr-standard` gamepad mapping, report Touch-controller profiles, and send
-  select and squeeze events. Haptics vibrate the phone. three.js, A-Frame, Babylon.js and plain-WebGL apps
-  render into their own canvas, which fills the screen while in VR.
-- **Touch controls**, transparent and drawn over the VR view:
-  - **1 finger:** look around.
-  - **2 fingers:** the left finger moves the left hand and the right finger moves the right hand.
-    **Hand: Move / Depth / Aim** changes whether the fingers move the hands up, down and sideways, push them
-    forward and back, or rotate them.
-  - **LT/RT** are the triggers, **LG/RG** the grips, and **X Y A B** the face buttons.
-  - Two **thumbsticks**. A quick tap on a stick clicks it.
-  - **Gyro** (look by moving the phone), **View: flat/3D** (side-by-side stereo for phone headsets),
-    **⟲ Center**, **⌂ Home** and **✕ Exit VR**.
-- **Launcher.** It has a URL bar, saved apps, a list of WebXR sites, an offline **XR Playground** (grab, throw and shoot cubes)
-  and settings for eye height, field of view, eye distance, render resolution and the headset user agent.
-  It can open `http://<your-pc>:port` dev servers and "Open with" web links.
+### Native VR games (APK)
 
-What it cannot do: run native headset apps (APKs from a headset store or SideQuest). Those need the headset's own
-OS, runtime services and GPU, which a phone app cannot provide. Hand tracking, passthrough/AR, composition layers
-and hit testing are not emulated. If a page asks for them as *required* features, it gets the same "not supported"
-answer a browser without them would give.
+Limosa XR is an **OpenXR runtime** for Android (`xr/src/main/cpp`):
+
+- Games ship the standard Khronos OpenXR loader. That loader asks the *runtime broker*
+  (`org.khronos.openxr.runtime_broker`) which runtime to use. Limosa XR provides that broker
+  (`RuntimeProvider`), so the loader loads `liblimosaxr_runtime.so` into the game's own process.
+- The runtime implements OpenXR 1.0/1.1 for a two-controller headset:
+  - sessions, reference spaces, views and the frame loop;
+  - the action system, which maps Touch, Touch Plus, Quest Pro, simple-controller and other profiles onto
+    the emulated buttons, sticks and poses;
+  - haptics, sent to the phone's vibrator;
+  - extensions: `XR_KHR_opengl_es_enable`, `XR_KHR_vulkan_enable`/`enable2`, `XR_KHR_android_create_instance`,
+    `XR_KHR_loader_init`, `XR_EXT_local_floor`, `XR_FB_display_refresh_rate`, `XR_FB_color_space` and a few others.
+- **Graphics.** OpenGL ES games share textures with the compositor directly. Vulkan games' images are bridged
+  through `AHardwareBuffer`s, or through a slower read-back where that's not available. A GL ES compositor draws
+  projection and quad layers, flat (one eye, full screen) or side by side for phone VR headsets.
+- **Overlay.** The runtime loads its Java half (`RuntimeUi`) from the Limosa XR APK into the game. It adds a
+  full-screen window with the game's view, the touch controls (including the Menu button) and gyro look.
+- **Home page.** Lists installed VR games and checks each APK's loader:
+  - ✓ standard loader;
+  - ✗ headset-only loader;
+  - ✗ VrApi;
+  - ✗ 32-bit only.
+
+  It also has **Install APK…**, **Play** and a **Runtime log** that games report into.
+
+Limits:
+- Games that ship only a headset vendor's own loader can't find any other runtime. The same goes for old VrApi
+  games and store games that check their license online.
+- Hand tracking, passthrough, spatial anchors and other vendor extensions aren't provided. Games that *require*
+  them refuse to start; games that only use them when present run.
+- Only one installed app can be the OpenXR runtime broker. Uninstall other runtimes or brokers (for example
+  Monado, or Khronos' "OpenXR Runtime Broker" app) first.
+- Phones are slower than headsets. Lower **Render resolution** in settings if a game stutters.
+
+The runtime has a desktop test suite. It runs the runtime with Vulkan (Mesa lavapipe) and OpenGL ES (Mesa EGL) the way a game
+would, and checks the composited pixels, image orientation, input actions, haptics and session lifecycle:
 
 ```sh
-./gradlew :xr:assembleDebug     # -> xr/build/outputs/apk/debug/xr-debug.apk
+cmake -S xr/runtime-tests -B build/rt -G Ninja && cmake --build build/rt
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json build/rt/test_runtime build/rt/runtime/liblimosaxr_runtime.so
+```
+
+### WebXR apps
+
+`xr/src/main/assets/xr/webxr-emulator.js` is injected into every page before its scripts run. It provides
+`navigator.xr` (`immersive-vr` and `inline`), reference spaces, `XRWebGLLayer` and two `tracked-pointer` controllers
+with the `xr-standard` gamepad mapping. three.js, A-Frame, Babylon.js and plain-WebGL apps work. The launcher
+has a URL bar, saved apps, links to WebXR sites, and an offline **XR Playground**.
+
+### Touch controls (both kinds)
+
+- **1 finger:** look around.
+- **2 fingers:** the left finger moves the left hand and the right finger moves the right hand.
+  **Hand: Move / Depth / Aim** switches between moving the hands, pushing them forward and back, and rotating them.
+- **LT/RT** are the triggers, **LG/RG** the grips, **X Y A B** the face buttons, plus two thumbsticks.
+  A quick tap on a stick clicks it. **≡ Menu** appears in native games.
+- **Gyro** looks by moving the phone, **View: flat/3D** switches to side by side, plus **⟲ Center**,
+  **⌂ Home** and **✕ Exit VR**.
+
+```sh
+./gradlew :xr:assembleDebug     # -> xr/build/outputs/apk/debug/xr-debug.apk (needs the Android NDK)
 ```

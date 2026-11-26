@@ -31,13 +31,38 @@
   .help { background:var(--card); border-radius:14px; padding:12px 16px; color:var(--dim); font-size:13.5px; }
   .help b { color:var(--text); }
   .note { color:var(--warn); font-size:13px; }
+  .apps { display:flex; flex-direction:column; gap:8px; }
+  .app { background:var(--card); border-radius:12px; padding:10px 12px; display:flex; align-items:center; gap:12px; }
+  .app .info { flex:1; min-width:0; }
+  .app .n { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .app .s { font-size:12.5px; color:var(--dim); }
+  .ok { color:#8be28b; } .bad { color:#ff8f8f; } .maybe { color:var(--warn); }
+  .row2 { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+  .btn2 { background:var(--card2); color:var(--text); }
+  pre.log { background:#07090c; color:#b9c3cf; border-radius:10px; padding:10px; font-size:11.5px; max-height:260px; overflow:auto; white-space:pre-wrap; word-break:break-all; margin:8px 0 0; }
+  .status { font-size:13px; margin-bottom:10px; }
 </style>
 </head>
 <body>
   <h1>Limosa XR</h1>
-  <div class="sub">A VR headset emulator for WebXR apps. Open an app, press its <b>Enter VR</b> button (or the one in the top bar), and play with the on-screen controllers.</div>
+  <div class="sub">A VR headset emulator. Native OpenXR games run with the on-screen controllers; WebXR apps run in the browser below (press their <b>Enter VR</b> button, or the one in the top bar).</div>
 
-  <h2>Open an app</h2>
+  <div id="native" hidden>
+    <h2>Native VR games (APK)</h2>
+    <div class="status" id="rtstatus"></div>
+    <div class="row2">
+      <button type="button" id="installApk">Install APK…</button>
+      <button type="button" class="btn2" id="refreshApps">Refresh</button>
+      <button type="button" class="btn2" id="showLog">Runtime log</button>
+    </div>
+    <div class="apps" id="apps"><div class="sub">Looking for installed VR games…</div></div>
+    <div id="logbox" hidden>
+      <pre class="log" id="log"></pre>
+      <div class="row2" style="margin-top:8px"><button type="button" class="btn2" id="reloadLog">Reload</button><button type="button" class="btn2" id="clearLog">Clear</button></div>
+    </div>
+  </div>
+
+  <h2>Open a WebXR app</h2>
   <form id="open">
     <input type="url" id="url" placeholder="https://… (any WebXR site, or http://192.168.x.x:port for your dev server)" autocomplete="off">
     <input type="text" id="name" placeholder="Name (to save it)" style="flex:0 1 160px">
@@ -65,8 +90,9 @@
 
   <h2>Settings</h2>
   <div class="settings" id="settings"></div>
-  <p class="note">Apps built for the browser (WebXR) run here. Native headset apps (APK files from a store or SideQuest) cannot:
-    they need the headset's own operating system and hardware.</p>
+  <p class="note">Native games: Limosa XR is an OpenXR runtime. Games built with the standard Khronos OpenXR loader (many recent
+    Unity, Unreal and Godot games) can start with it. Games built only for one headset's own loader, old VrApi games, and store
+    games that check their license online cannot. Games that need extra data files (OBB) need them copied to Android/obb as usual.</p>
 
 <script>
 (function () {
@@ -171,6 +197,83 @@
   });
   if (!bridge) box.innerHTML = '<div class="row"><label>Settings are available inside the Limosa XR app.</label></div>';
   render();
+
+  // ---- Native games: talks to the app over a channel only this page can use.
+  var home = window.limosaHome;
+  if (home) {
+    document.getElementById('native').hidden = false;
+    var seq = 0, waiting = {};
+    home.onmessage = function (e) {
+      var m; try { m = JSON.parse(e.data); } catch (err) { return; }
+      if (m.event) { onEvent(m.event, m.data); return; }
+      var cb = waiting[m.id]; delete waiting[m.id];
+      if (cb) cb(m.result);
+    };
+    var call = function (cmd, args, cb) { var id = ++seq; waiting[id] = cb || function () {}; home.postMessage(JSON.stringify({ id: id, cmd: cmd, args: args || {} })); };
+    var VERDICT = {
+      'compatible': ['ok', 'Uses the standard OpenXR loader: should start with Limosa XR'],
+      'unknown': ['maybe', 'No OpenXR loader found in the APK: may not be a native VR game'],
+      'headset-loader': ['bad', 'Uses a headset-only OpenXR loader: it cannot find Limosa XR'],
+      'vrapi': ['bad', 'Uses the old VrApi instead of OpenXR: not supported'],
+      'wrong-abi': ['bad', 'Built for a different processor type (e.g. 32-bit only)'],
+    };
+    var apps = document.getElementById('apps');
+    var loadApps = function () {
+      apps.innerHTML = '<div class="sub">Looking for installed VR games…</div>';
+      call('apps', {}, function (list) {
+        apps.innerHTML = '';
+        if (!list || !list.length) { apps.innerHTML = '<div class="sub">No VR games installed yet. Use <b>Install APK…</b> to add one.</div>'; return; }
+        list.forEach(function (a) {
+          var v = VERDICT[a.verdict] || VERDICT.unknown;
+          var el = document.createElement('div');
+          el.className = 'app';
+          el.innerHTML = '<div class="info"><div class="n"></div><div class="s"></div></div><button type="button">Play</button>';
+          el.querySelector('.n').textContent = a.name;
+          var st = el.querySelector('.s');
+          st.className = 's ' + v[0];
+          st.textContent = v[1];
+          var b = el.querySelector('button');
+          if (!a.launchable) { b.disabled = true; b.textContent = 'No launcher'; }
+          b.onclick = function () { call('launch', { pkg: a.pkg }, function (err) { if (err) alert(err); }); };
+          apps.appendChild(el);
+        });
+      });
+    };
+    var rt = document.getElementById('rtstatus');
+    var loadRuntime = function () {
+      call('runtime', {}, function (r) {
+        if (!r) return;
+        rt.innerHTML = '';
+        var line = document.createElement('div');
+        if (!r.libPresent) { line.className = 'bad'; line.textContent = 'The runtime library is missing from this build of Limosa XR.'; }
+        else if (!r.isOurs) { line.className = 'bad'; line.textContent = 'Another app (' + (r.brokerOwner || 'unknown') + ') is the OpenXR runtime broker. Uninstall it so games find Limosa XR.'; }
+        else if (!r.enabled) { line.className = 'maybe'; line.textContent = 'The Limosa XR OpenXR runtime is turned off.'; }
+        else { line.className = 'ok'; line.textContent = 'Limosa XR is the OpenXR runtime for native games (' + r.abi + ').'; }
+        rt.appendChild(line);
+        var lab = document.createElement('label');
+        lab.style.cssText = 'display:inline-flex;gap:8px;align-items:center;margin-top:6px;color:var(--dim)';
+        lab.innerHTML = '<input type="checkbox"> Use Limosa XR as the OpenXR runtime';
+        var cb = lab.querySelector('input');
+        cb.checked = !!r.enabled;
+        cb.onchange = function () { call('setRuntimeEnabled', { on: cb.checked }, loadRuntime); };
+        rt.appendChild(lab);
+      });
+    };
+    var logbox = document.getElementById('logbox'), logEl = document.getElementById('log');
+    var loadLog = function () { call('log', {}, function (t) { logEl.textContent = t || 'Nothing yet. Start a game and come back.'; logEl.scrollTop = logEl.scrollHeight; }); };
+    document.getElementById('showLog').onclick = function () { logbox.hidden = !logbox.hidden; if (!logbox.hidden) loadLog(); };
+    document.getElementById('reloadLog').onclick = loadLog;
+    document.getElementById('clearLog').onclick = function () { call('clearLog', {}, loadLog); };
+    document.getElementById('refreshApps').onclick = function () { loadApps(); loadRuntime(); };
+    document.getElementById('installApk').onclick = function () { call('install'); };
+    var onEvent = function (name, data) {
+      if (name === 'installing') apps.insertAdjacentHTML('afterbegin', '<div class="sub">Installing… Android will ask you to confirm.</div>');
+      if (name === 'installed') { if (data && data !== 'ok') alert('Install: ' + data); loadApps(); }
+    };
+    loadRuntime();
+    loadApps();
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) { loadApps(); loadRuntime(); } });
+  }
 })();
 </script>
 </body>

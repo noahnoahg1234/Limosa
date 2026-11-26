@@ -93,6 +93,14 @@ class MainActivity : Activity(), ControllerOverlay.Listener {
             WebViewCompat.addDocumentStartJavaScript(web, emulatorJs, setOf("*"))
         }
 
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            // Native-game features for the built-in home page only; other sites never see this object.
+            WebViewCompat.addWebMessageListener(web, "limosaHome", setOf("https://$ASSET_HOST")) { _, message, _, isMainFrame, reply ->
+                if (isMainFrame) handleHomeMessage(message.data ?: "", reply)
+            }
+        }
+        NativeApps.onInstalled = { result -> runOnUiThread { homeEvent("installed", result) } }
+
         web.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
                 assetLoader.shouldInterceptRequest(request.url)
@@ -187,6 +195,69 @@ class MainActivity : Activity(), ControllerOverlay.Listener {
             addView(btn("⟳") { web.reload() })
             addView(urlBar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(btn("Enter VR") { enterVr() })
+        }
+    }
+
+    // ------------------------------------------------------------ home page channel --
+
+    private val io = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val nativeApps by lazy { NativeApps(this) }
+    private var homeReply: androidx.webkit.JavaScriptReplyProxy? = null
+
+    private fun handleHomeMessage(data: String, reply: androidx.webkit.JavaScriptReplyProxy) {
+        homeReply = reply
+        val msg = runCatching { JSONObject(data) }.getOrNull() ?: return
+        val id = msg.optInt("id")
+        val args = msg.optJSONObject("args") ?: JSONObject()
+        fun answer(result: Any?) = runOnUiThread {
+            runCatching { reply.postMessage(JSONObject().put("id", id).put("result", result ?: JSONObject.NULL).toString()) }
+        }
+        when (msg.optString("cmd")) {
+            "apps" -> io.execute { answer(runCatching { nativeApps.list() }.getOrElse { JSONArray() }) }
+            "launch" -> answer(nativeApps.launch(this, args.optString("pkg")))
+            "install" -> {
+                @Suppress("DEPRECATION")
+                startActivityForResult(
+                    Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"),
+                    PICK_APK,
+                )
+                answer(null)
+            }
+            "log" -> io.execute {
+                val f = com.limosa.xr.runtime.RuntimeProvider.logFile(this)
+                answer(if (f.exists()) f.readText().takeLast(20000) else "")
+            }
+            "clearLog" -> io.execute { com.limosa.xr.runtime.RuntimeProvider.logFile(this).delete(); answer(null) }
+            "runtime" -> io.execute {
+                val owner = nativeApps.brokerOwner()
+                answer(JSONObject().apply {
+                    put("enabled", prefs.getBoolean("runtimeEnabled", true))
+                    put("brokerOwner", owner ?: JSONObject.NULL)
+                    put("isOurs", owner == packageName)
+                    put("abi", Build.SUPPORTED_ABIS.firstOrNull())
+                    put("libPresent", java.io.File(applicationInfo.nativeLibraryDir, com.limosa.xr.runtime.RuntimeProvider.LIB).exists())
+                })
+            }
+            "setRuntimeEnabled" -> {
+                prefs.edit().putBoolean("runtimeEnabled", args.optBoolean("on", true)).apply()
+                answer(null)
+            }
+        }
+    }
+
+    private fun homeEvent(name: String, data: Any?) {
+        runCatching { homeReply?.postMessage(JSONObject().put("event", name).put("data", data ?: JSONObject.NULL).toString()) }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != PICK_APK) return
+        val uri = data?.data ?: return
+        homeEvent("installing", null)
+        io.execute {
+            val err = nativeApps.install(this, uri)
+            runOnUiThread { if (err != null) homeEvent("installed", err) }
         }
     }
 
@@ -292,7 +363,7 @@ class MainActivity : Activity(), ControllerOverlay.Listener {
         synchronized(state) {
             state.stereo = prefs.getBoolean("stereo", false)
             state.eyeHeight = prefs.getFloat("eyeHeight", 1.6f)
-            state.fovDegrees = prefs.getFloat("fov", 80f)
+            state.fovDegrees = prefs.getFloat("fov", 70f)
             state.ipd = prefs.getFloat("ipd", 0.063f)
             state.renderScale = prefs.getFloat("renderScale", 1f)
         }
@@ -307,7 +378,7 @@ class MainActivity : Activity(), ControllerOverlay.Listener {
         put("gyro", prefs.getBoolean("gyro", false))
         put("stereo", prefs.getBoolean("stereo", false))
         put("eyeHeight", prefs.getFloat("eyeHeight", 1.6f).toDouble())
-        put("fov", prefs.getFloat("fov", 80f).toDouble())
+        put("fov", prefs.getFloat("fov", 70f).toDouble())
         put("ipd", prefs.getFloat("ipd", 0.063f).toDouble())
         put("renderScale", prefs.getFloat("renderScale", 1f).toDouble())
         put("gyroAvailable", head.available)
@@ -342,6 +413,8 @@ class MainActivity : Activity(), ControllerOverlay.Listener {
 
     override fun onDestroy() {
         head.setEnabled(false)
+        NativeApps.onInstalled = null
+        io.shutdown()
         web.destroy()
         super.onDestroy()
     }
@@ -400,6 +473,7 @@ class MainActivity : Activity(), ControllerOverlay.Listener {
     }
 
     companion object {
+        private const val PICK_APK = 7
         const val ASSET_HOST = "appassets.androidplatform.net"
         const val HOME_URL = "https://$ASSET_HOST/assets/home/index.html"
         // Sites that only offer VR to headset browsers check for this kind of user agent.

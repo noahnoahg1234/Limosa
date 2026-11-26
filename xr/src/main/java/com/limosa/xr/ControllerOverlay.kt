@@ -35,6 +35,9 @@ class ControllerOverlay(context: Context, private val state: XrState) : View(con
         set(v) { field = v; invalidate() }
     var stereoOn = false
         set(v) { field = v; invalidate() }
+    /** Shows the left controller's menu button (native games use it to pause). */
+    var showMenu = false
+        set(v) { field = v; if (width > 0) layoutControls(width.toFloat(), height.toFloat()); invalidate() }
 
     private enum class Mode(val label: String) { MOVE("Hand: Move"), DEPTH("Hand: Depth"), ROTATE("Hand: Aim") }
     private var mode = Mode.MOVE
@@ -71,6 +74,7 @@ class ControllerOverlay(context: Context, private val state: XrState) : View(con
         Btn("RG", "RG", Kind.HOLD, state.right, 1),
         Btn("A", "A", Kind.HOLD, state.right, 4),
         Btn("B", "B", Kind.HOLD, state.right, 5),
+        Btn("menu", "≡ Menu", Kind.PILL, state.left, 7),
         Btn("center", "⟲ Center", Kind.PILL),
         Btn("gyro", "Gyro", Kind.PILL),
         Btn("stereo", "Stereo", Kind.PILL),
@@ -155,7 +159,7 @@ class ControllerOverlay(context: Context, private val state: XrState) : View(con
         place("B", w - sx - faceR * 1.9f, h - m - faceR * 3.3f, faceR)
 
         // System row along the top.
-        val pills = buttons.filter { it.kind == Kind.PILL }
+        val pills = visiblePills()
         val ph = dp(34f)
         val gap = dp(8f)
         val widths = pills.map { small.measureText(pillLabel(it)) + dp(22f) }
@@ -171,6 +175,8 @@ class ControllerOverlay(context: Context, private val state: XrState) : View(con
             x += bw + gap * shrink
         }
     }
+
+    private fun visiblePills() = buttons.filter { it.kind == Kind.PILL && (it.id != "menu" || showMenu) }
 
     private fun pillLabel(b: Btn) = when (b.id) {
         "gyro" -> if (gyroOn) "Gyro: on" else "Gyro: off"
@@ -202,7 +208,7 @@ class ControllerOverlay(context: Context, private val state: XrState) : View(con
     }
 
     private fun down(id: Int, x: Float, y: Float) {
-        val pill = buttons.firstOrNull { it.kind == Kind.PILL && it.hit(x, y) && (!hidden || it.id == "hide") }
+        val pill = visiblePills().firstOrNull { it.hit(x, y) && (!hidden || it.id == "hide") }
         if (pill != null) {
             pointers[id] = Pointer(Role.Ignore, x, y)
             pill.pressed = true
@@ -325,6 +331,11 @@ class ControllerOverlay(context: Context, private val state: XrState) : View(con
             "mode" -> mode = Mode.values()[(mode.ordinal + 1) % Mode.values().size]
             "hide" -> hidden = !hidden
             "center" -> synchronized(state) { state.recenter() }
+            "menu" -> {
+                // A short press of the menu button.
+                synchronized(state) { state.left.buttons[7] = 1f; state.left.touched[7] = true }
+                postDelayed({ synchronized(state) { state.left.buttons[7] = 0f; state.left.touched[7] = false } }, 150)
+            }
         }
         listener?.onSystemAction(id)
         invalidate()
@@ -334,8 +345,7 @@ class ControllerOverlay(context: Context, private val state: XrState) : View(con
 
     override fun onDraw(c: Canvas) {
         // System pills.
-        for (b in buttons) {
-            if (b.kind != Kind.PILL) continue
+        for (b in visiblePills()) {
             if (hidden && b.id != "hide") continue
             val active = b.pressed || (b.id == "gyro" && gyroOn) || (b.id == "stereo" && stereoOn)
             fill.color = Color.argb(if (active) 120 else 55, 255, 255, 255)

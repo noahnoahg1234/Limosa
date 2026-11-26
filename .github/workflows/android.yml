@@ -33,6 +33,13 @@ jobs:
       - name: Core tests
         run: ./gradlew :core:test
 
+      - name: OpenXR runtime tests (desktop build, Mesa lavapipe + EGL)
+        run: |
+          sudo apt-get install -y cmake ninja-build libvulkan-dev mesa-vulkan-drivers libegl-dev libgles-dev libegl-mesa0
+          cmake -S xr/runtime-tests -B build/rt -G Ninja
+          cmake --build build/rt
+          VK_ICD_FILENAMES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1) build/rt/test_runtime build/rt/runtime/liblimosaxr_runtime.so
+
       - name: Bundle QEMU from Termux packages
         id: qemu
         continue-on-error: true
@@ -75,5 +82,5 @@ jobs:
             Android APK for Limosa (arm64 phones).
             QEMU bundled: ${{ steps.qemu.outcome == 'success' && 'yes (x86-64 and ARM64 guests)' || 'no - VMs cannot start in this build; storage and dashboard still work' }}.
             Install: download `limosa.apk` on your phone, open it and allow installing from this source.
-            `limosa-xr.apk` is Limosa XR, the VR headset emulator for WebXR apps.
+            `limosa-xr.apk` is Limosa XR, the VR headset emulator: an OpenXR runtime for native VR games plus a WebXR browser.
             Built from ${{ github.sha }}.
