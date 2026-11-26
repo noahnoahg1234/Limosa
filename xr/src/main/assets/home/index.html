@@ -60,6 +60,7 @@
       <input type="text" id="appFilter" placeholder="Search installed apps" style="flex:1 1 160px">
       <label style="color:var(--dim);display:inline-flex;gap:6px;align-items:center"><input type="checkbox" id="allApps"> Show all apps</label>
     </div>
+    <div class="status" id="ctlstatus"></div>
     <div class="apps" id="apps"><div class="sub">Looking for installed VR games…</div></div>
     <div id="logbox" hidden>
       <pre class="log" id="log"></pre>
@@ -240,7 +241,8 @@
         var v = VERDICT[a.verdict] || VERDICT.unknown;
         var el = document.createElement('div');
         el.className = 'app';
-        el.innerHTML = '<div class="info"><div class="n"></div><div class="s"></div><div class="d"></div></div><button type="button"></button>';
+        el.innerHTML = '<div class="info"><div class="n"></div><div class="s"></div><div class="d"></div></div>' +
+          '<button type="button" class="btn2 ctl" title="Open with the controller over it">🎮 Controls</button><button type="button" class="play"></button>';
         el.querySelector('.n').textContent = a.name;
         var st = el.querySelector('.s');
         st.className = 's ' + v[0];
@@ -250,7 +252,10 @@
         if (a.abis && a.abis.length) details += ' · ' + a.abis.join('/');
         if (a.scanError) details += ' · could not read the APK: ' + a.scanError;
         el.querySelector('.d').textContent = details;
-        var b = el.querySelector('button');
+        var b = el.querySelector('button.play');
+        el.querySelector('button.ctl').onclick = function () {
+          call('playWithControls', { pkg: a.pkg }, function (err) { if (err) { alert(err); loadControls(); } });
+        };
         b.textContent = a.verdict === 'compatible' || a.verdict === 'unknown' ? 'Play' : 'Try anyway';
         if (a.verdict !== 'compatible' && a.verdict !== 'unknown') b.className = 'btn2';
         if (!a.launchable) { b.disabled = true; b.textContent = 'No launcher'; }
@@ -264,6 +269,45 @@
     };
     filterEl.oninput = renderApps;
     allEl.onchange = loadApps;
+    // ---- Controls over any app (Shizuku).
+    var ctl = document.getElementById('ctlstatus');
+    var loadControls = function () {
+      call('controlsState', {}, function (st) {
+        if (!st) return;
+        ctl.innerHTML = '';
+        var ready = st.overlay && st.shizukuRunning && st.permission;
+        var head = document.createElement('div');
+        head.className = ready ? 'ok' : 'maybe';
+        head.textContent = ready ? '🎮 Controls over any app are ready: tap 🎮 Controls next to an app.'
+          : '🎮 Controls over any app (games, phone VR apps) need a one-time setup:';
+        ctl.appendChild(head);
+        if (ready) return;
+        var steps = [
+          [st.overlay, 'Allow "display over other apps"', 'overlay'],
+          [st.shizukuInstalled, 'Install Shizuku (free)', 'getShizuku'],
+          [st.shizukuRunning, 'Start Shizuku (with Wireless debugging; again after each reboot)', 'openShizuku'],
+          [st.permission, 'Allow Limosa XR in Shizuku', 'permission'],
+        ];
+        steps.forEach(function (s, i) {
+          var row = document.createElement('div');
+          row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:6px';
+          var label = document.createElement('span');
+          label.className = s[0] ? 'ok' : '';
+          label.style.flex = '1';
+          label.textContent = (s[0] ? '✓ ' : (i + 1) + '. ') + s[1];
+          row.appendChild(label);
+          if (!s[0]) {
+            var b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'btn2';
+            b.textContent = 'Do it';
+            b.onclick = function () { call('controlsSetup', { step: s[2] }, function (err) { if (err) alert(err); setTimeout(loadControls, 800); }); };
+            row.appendChild(b);
+          }
+          ctl.appendChild(row);
+        });
+      });
+    };
     var rt = document.getElementById('rtstatus');
     var loadRuntime = function () {
       call('runtime', {}, function (r) {
@@ -295,10 +339,12 @@
       if (name === 'installing') apps.insertAdjacentHTML('afterbegin', '<div class="sub">Installing… Android will ask you to confirm.</div>');
       if (name === 'installed') { if (data && data !== 'ok') alert('Install: ' + data); loadApps(); }
       if (name === 'note') alert(data);
+      if (name === 'controls') loadControls();
     };
     loadRuntime();
+    loadControls();
     loadApps();
-    document.addEventListener('visibilitychange', function () { if (!document.hidden) { loadApps(); loadRuntime(); } });
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) { loadApps(); loadRuntime(); loadControls(); } });
   }
 })();
 </script>

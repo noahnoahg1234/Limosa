@@ -33,6 +33,10 @@ android {
         }
     }
 
+    buildFeatures {
+        aidl = true
+    }
+
     packaging {
         jniLibs {
             // The OpenXR loader in each game opens the runtime by file path, so it must be extracted.
@@ -59,5 +63,9 @@ android {
 dependencies {
     // Document-start scripts (navigator.xr before any page code) and the https asset origin.
     implementation("androidx.webkit:webkit:1.12.1")
+    // Controls over any app: Shizuku runs our touch service as the shell user.
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
+    implementation("org.lsposed.hiddenapibypass:hiddenapibypass:6.2")
     testImplementation("junit:junit:4.13.2")
 }

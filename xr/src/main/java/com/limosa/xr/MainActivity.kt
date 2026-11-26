@@ -100,6 +100,7 @@ class MainActivity : Activity(), ControllerOverlay.Listener {
             }
         }
         NativeApps.onInstalled = { result -> runOnUiThread { homeEvent("installed", result) } }
+        runCatching { rikka.shizuku.Shizuku.addRequestPermissionResultListener(shizukuResult) }
 
         web.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
@@ -238,12 +239,51 @@ class MainActivity : Activity(), ControllerOverlay.Listener {
                     put("libPresent", java.io.File(applicationInfo.nativeLibraryDir, com.limosa.xr.runtime.RuntimeProvider.LIB).exists())
                 })
             }
+            "controlsState" -> answer(com.limosa.xr.mapper.MapperService.state(this))
+            "controlsSetup" -> answer(controlsSetup(args.optString("step")))
+            "playWithControls" -> {
+                val pkg = args.optString("pkg")
+                val problem = com.limosa.xr.mapper.MapperService.problem(this)
+                if (problem != null) {
+                    answer(problem)
+                } else {
+                    if (Build.VERSION.SDK_INT >= 33 &&
+                        checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                    ) requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 3)
+                    val i = Intent(this, com.limosa.xr.mapper.MapperService::class.java).putExtra(com.limosa.xr.mapper.MapperService.EXTRA_PACKAGE, pkg)
+                    if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+                    answer(nativeApps.launch(this, pkg))
+                }
+            }
             "setRuntimeEnabled" -> {
                 prefs.edit().putBoolean("runtimeEnabled", args.optBoolean("on", true)).apply()
                 answer(null)
             }
         }
     }
+
+    /** One step of setting up controls over other apps; returns a message for the page, or null. */
+    private fun controlsSetup(step: String): String? = when (step) {
+        "overlay" -> {
+            startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+            null
+        }
+        "getShizuku" -> {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://shizuku.rikka.app/download/")))
+            null
+        }
+        "openShizuku" -> {
+            val i = packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")
+            if (i != null) { startActivity(i); null } else "Shizuku is not installed."
+        }
+        "permission" -> runCatching {
+            if (rikka.shizuku.Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED) null
+            else { rikka.shizuku.Shizuku.requestPermission(com.limosa.xr.mapper.MapperService.SHIZUKU_REQUEST); null }
+        }.getOrElse { "Start Shizuku first." }
+        else -> null
+    }
+
+    private val shizukuResult = rikka.shizuku.Shizuku.OnRequestPermissionResultListener { _, _ -> runOnUiThread { homeEvent("controls", null) } }
 
     private fun homeEvent(name: String, data: Any?) {
         runCatching { homeReply?.postMessage(JSONObject().put("event", name).put("data", data ?: JSONObject.NULL).toString()) }
@@ -417,6 +457,7 @@ class MainActivity : Activity(), ControllerOverlay.Listener {
     override fun onDestroy() {
         head.setEnabled(false)
         NativeApps.onInstalled = null
+        runCatching { rikka.shizuku.Shizuku.removeRequestPermissionResultListener(shizukuResult) }
         io.shutdown()
         web.destroy()
         super.onDestroy()

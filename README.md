@@ -188,6 +188,29 @@ cmake -S xr/runtime-tests -B build/rt -G Ninja && cmake --build build/rt
 VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json build/rt/test_runtime build/rt/runtime/liblimosaxr_runtime.so
 ```
 
+### Controls over any app (Shizuku)
+
+**🎮 Controls** next to any app opens it with the controller drawn on top. This works for normal games, phone VR
+(Cardboard-style) apps and anything else that takes touch. **✎ Edit** lets you drag each control where you
+want it, and drag its crosshair onto the app's own button that it should press. Layouts are saved per app and
+orientation.
+
+- **Buttons** hold a finger on their target.
+- **Left stick** moves a finger around its target, which drives a game's on-screen joystick.
+- **Right stick** keeps dragging from its target, which turns a game's camera.
+- **All other touches** pass straight through, so the app still works normally.
+
+How it works: real and injected touches cancel each other on most Android versions. So while controls are on,
+`InputService` runs as the shell user through [Shizuku](https://shizuku.rikka.app/) and takes over the touchscreen
+(`EVIOCGRAB`). It streams raw fingers to `MapperService`, which decides what the app should see, and injects
+that as one touch stream. The overlay window itself never takes touches.
+
+The touchscreen is given back when controls stop, when Limosa XR stops responding for 2.5 s, or when either
+process ends.
+
+Setup is once: allow "display over other apps", install Shizuku, start it with Wireless debugging (again after
+each reboot), and allow Limosa XR in Shizuku. The home page walks through it.
+
 ### WebXR apps
 
 `xr/src/main/assets/xr/webxr-emulator.js` is injected into every page before its scripts run. It provides
