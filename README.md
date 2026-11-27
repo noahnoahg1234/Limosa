@@ -65,6 +65,9 @@ LinuxService (foreground) ── proot (libproot.so) ── Debian rootfs ──
   to the phone's speaker or headphones. Use KDE's volume control or the phone's volume buttons.
 - **Discover** (KDE's app store) works through PackageKit: KDE Home starts the system D-Bus, polkit (with no
   password prompts) and PackageKit itself, because systemd isn't there to do it.
+  If Discover won't install something, use the menu's **Install Linux apps…** (type package names, e.g.
+  `vlc gimp`) or **Linux terminal as root** (`apt install …`). Discover's service messages are in
+  Internal storage › Linux › logs › `services.log`.
 - **Resource saving** (on by default, in the menu): when KDE isn't on screen (screen off, or another app open), every
   Linux program is paused after 20 seconds and uses no CPU, then continues as soon as you're back. The display
   is limited to 30 frames a second. Turn it off if something in Linux should keep running in the background.

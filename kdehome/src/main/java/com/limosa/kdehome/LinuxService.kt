@@ -85,6 +85,8 @@ class LinuxService : Service() {
                 }
             }
             ACTION_HIDDEN -> scheduleFreeze()
+            ACTION_ROOT_TERMINAL -> rootTerminal()
+            ACTION_APT_INSTALL -> aptInstall(intent.getStringExtra(EXTRA_PACKAGES).orEmpty())
         }
         return START_STICKY
     }
@@ -263,6 +265,9 @@ class LinuxService : Service() {
             |dbus-uuidgen --ensure 2>/dev/null
             |dbus-daemon --system --nofork --nopidfile &
             |for i in ${'$'}(seq 50); do [ -S /run/dbus/system_bus_socket ] && break; sleep 0.1; done
+            |# Android hides the network state from Linux (no netlink), so GLib would think the phone is
+            |# offline and PackageKit would refuse to download. "base" always reports online.
+            |export GIO_USE_NETWORK_MONITOR=base
             |# Started directly: D-Bus can't start them itself here (its setuid helper doesn't work under proot).
             |for p in /usr/lib/polkit-1/polkitd /usr/libexec/polkitd; do
             |  [ -x "${'$'}p" ] && { "${'$'}p" --no-debug & break; }
@@ -275,7 +280,13 @@ class LinuxService : Service() {
             |""".trimMargin()
         systemBus = runCatching { proot.process(script, asUser = false).start() }.getOrNull()?.also { p ->
             thread(name = "system-bus-log", isDaemon = true) {
-                p.inputStream.bufferedReader().forEachLine { LinuxState.log("dbus: $it") }
+                // D-Bus, polkit and PackageKit messages: Internal storage/Linux/logs/services.log
+                val log = java.io.File(paths.base, "services.log").apply { writeText("") }
+                p.inputStream.bufferedReader().forEachLine {
+                    LinuxState.log("dbus: $it")
+                    if (log.length() < 2L * 1024 * 1024) log.appendText(it + "\n")
+                    paths.publishLog(log)
+                }
             }
         }
         // Give it a moment to create its socket before Plasma looks for it.
@@ -300,7 +311,7 @@ class LinuxService : Service() {
     }
 
     private fun sessionScript(w: Int, h: Int): String = """
-        |export DISPLAY=:1 XDG_RUNTIME_DIR=/tmp/runtime-user XDG_SESSION_TYPE=x11
+        |export DISPLAY=:1 XDG_RUNTIME_DIR=/tmp/runtime-user XDG_SESSION_TYPE=x11 GIO_USE_NETWORK_MONITOR=base
         |export XDG_CURRENT_DESKTOP=KDE KDE_FULL_SESSION=true DESKTOP_SESSION=plasma
         |export KWIN_COMPOSE=N LIBGL_ALWAYS_SOFTWARE=1 QT_X11_NO_MITSHM=1
         |export LANG=C.UTF-8 BROWSER=android-open NO_AT_BRIDGE=1 QT_ACCESSIBILITY=0
@@ -323,6 +334,57 @@ class LinuxService : Service() {
         |echo "!!! KDE Plasma exited with code ${'$'}code"
         |exit ${'$'}code
         |""".trimMargin()
+
+    // ---- Installing Linux apps without Discover ------------------------------------------------
+
+    /** A Konsole window on the KDE desktop running as root: apt install works there. */
+    private fun rootTerminal() {
+        if (session?.isAlive != true) return
+        val script = """
+            |export DISPLAY=:1 XDG_RUNTIME_DIR=/tmp/runtime-root QT_X11_NO_MITSHM=1 GIO_USE_NETWORK_MONITOR=base
+            |mkdir -p "${'$'}XDG_RUNTIME_DIR"; chmod 700 "${'$'}XDG_RUNTIME_DIR"
+            |cd /root
+            |exec dbus-launch --exit-with-session konsole --hide-menubar -p tabtitle='root (apt install …)'
+            |""".trimMargin()
+        thread(name = "root-terminal", isDaemon = true) {
+            runCatching {
+                val p = proot.process(script, asUser = false).start()
+                p.inputStream.bufferedReader().forEachLine { }
+            }
+        }
+    }
+
+    @Volatile private var aptBusy = false
+
+    /** apt-get install as root, with the output in the log and the result in the notification. */
+    private fun aptInstall(packages: String) {
+        val names = packages.split(Regex("[\\s,]+")).filter { it.matches(Regex("[a-z0-9][a-z0-9+.-]*")) }
+        if (names.isEmpty() || aptBusy || installer != null) return
+        aptBusy = true
+        val list = names.joinToString(" ")
+        updateNotification("Installing $list…")
+        LinuxState.log(">>> Installing $list")
+        val script = """
+            |export DEBIAN_FRONTEND=noninteractive
+            |apt-get install -y $list || { apt-get update && apt-get install -y $list; }
+            |""".trimMargin()
+        thread(name = "apt-install") {
+            val ok = try {
+                if (LinuxFreezer.frozen) LinuxFreezer.thaw()
+                val p = proot.process(script, asUser = false).start()
+                p.inputStream.bufferedReader().forEachLine { LinuxState.log(it) }
+                p.waitFor() == 0
+            } catch (e: Exception) {
+                LinuxState.log("!!! ${e.message}")
+                false
+            }
+            aptBusy = false
+            val msg = if (ok) "Installed $list. It's in the KDE menu." else "Could not install $list (see the log)"
+            LinuxState.log(">>> $msg")
+            updateNotification(msg)
+            main.post { android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show() }
+        }
+    }
 
     // ---- Resource saving -----------------------------------------------------------------------
 
@@ -395,6 +457,8 @@ class LinuxService : Service() {
         const val ACTION_STOP = "com.limosa.kdehome.STOP"
         const val ACTION_SYNC = "com.limosa.kdehome.SYNC"
         const val ACTION_VISIBLE = "com.limosa.kdehome.VISIBLE"
+        const val ACTION_ROOT_TERMINAL = "com.limosa.kdehome.ROOT_TERMINAL"
+        const val ACTION_APT_INSTALL = "com.limosa.kdehome.APT_INSTALL"
         const val ACTION_HIDDEN = "com.limosa.kdehome.HIDDEN"
         const val PREF_RESOURCE_SAVING = "resourceSaving"
         private const val FREEZE_DELAY_MS = 20_000L

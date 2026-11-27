@@ -468,11 +468,35 @@ class HomeActivity : Activity() {
             Toast.makeText(this, "Turn on \"KDE Home PC Keyboard\", then pick it", Toast.LENGTH_LONG).show()
             runCatching { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) }
         }
+        item("Install Linux apps…") { askAptInstall() }
+        item("Linux terminal as root") {
+            LinuxService.send(this, LinuxService.ACTION_ROOT_TERMINAL)
+            Toast.makeText(this, "Opening a root Konsole on the KDE desktop: apt install works there", Toast.LENGTH_LONG).show()
+        }
         item("Restart KDE") { restartKde() }
         item("Stop Linux") { stopLinux() }
         item("Choose default home app") { openHomeSettings() }
         item("Android settings") { startActivity(Intent(Settings.ACTION_SETTINGS)) }
         return col
+    }
+
+    /** Installs Debian packages as root (Discover's fallback). */
+    private fun askAptInstall() {
+        val field = EditText(this).apply {
+            hint = "e.g. vlc gimp libreoffice"
+            setSingleLine()
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Install Linux apps")
+            .setMessage("Debian package names, separated by spaces. The notification shows when it's done.")
+            .setView(field)
+            .setPositiveButton("Install") { _, _ ->
+                LinuxService.send(this, LinuxService.ACTION_APT_INSTALL) {
+                    it.putExtra(LinuxService.EXTRA_PACKAGES, field.text.toString().lowercase())
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun chooseScale() {
