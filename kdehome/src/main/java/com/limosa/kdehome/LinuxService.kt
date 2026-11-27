@@ -150,10 +150,19 @@ class LinuxService : Service() {
             paths.publishLog(paths.sessionLog)
             if (session === p) {
                 session = null
-                LinuxState.set(LinuxState.Phase.STOPPED, "KDE stopped (exit code $code). See Internal storage/Linux/logs/session.log")
+                // Put the end of the session log on screen so a crash can be read and copied.
+                runCatching { paths.sessionLog.readLines().takeLast(40) }.getOrDefault(emptyList())
+                    .forEach { LinuxState.log(it) }
+                LinuxState.set(LinuxState.Phase.STOPPED, "KDE stopped: ${exitReason(code)}")
                 updateNotification("KDE stopped")
             }
         }
+    }
+
+    private fun exitReason(code: Int): String {
+        val signals = mapOf(4 to "SIGILL", 6 to "SIGABRT (abort)", 7 to "SIGBUS", 9 to "SIGKILL (killed by Android?)",
+            11 to "SIGSEGV (crash)", 15 to "SIGTERM", 31 to "SIGSYS (blocked system call)")
+        return if (code > 128) "exit code $code = signal ${code - 128} ${signals[code - 128].orEmpty()}" else "exit code $code"
     }
 
     private fun waitForDisplay(p: Process) {

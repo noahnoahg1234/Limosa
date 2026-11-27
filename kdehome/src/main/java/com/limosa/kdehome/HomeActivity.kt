@@ -47,6 +47,8 @@ class HomeActivity : Activity() {
     private lateinit var status: LinearLayout
     private lateinit var statusText: TextView
     private lateinit var statusButton: Button
+    private lateinit var statusLog: TextView
+    private lateinit var copyLogButton: Button
     private lateinit var setup: ScrollView
     private lateinit var drawer: AppDrawer
     private lateinit var keys: HorizontalScrollView
@@ -148,6 +150,9 @@ class HomeActivity : Activity() {
         }
         val canStart = phase == LinuxState.Phase.STOPPED || phase == LinuxState.Phase.ERROR
         statusButton.visibility = if (canStart) View.VISIBLE else View.GONE
+        copyLogButton.visibility = if (canStart) View.VISIBLE else View.GONE
+        statusLog.visibility = if (canStart) View.VISIBLE else View.GONE
+        if (canStart) statusLog.text = LinuxState.logTail(40)
     }
 
     private fun renderSetup() {
@@ -258,6 +263,12 @@ class HomeActivity : Activity() {
         autoStarted = false
     }
 
+    private fun copyLog() {
+        val text = LinuxState.message + "\n" + LinuxState.logTail(200)
+        getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("KDE Home log", text))
+        Toast.makeText(this, "Log copied", Toast.LENGTH_SHORT).show()
+    }
+
     private fun openHomeSettings() {
         runCatching { startActivity(Intent(Settings.ACTION_HOME_SETTINGS)) }
             .onFailure { startActivity(Intent(Settings.ACTION_SETTINGS)) }
@@ -358,6 +369,16 @@ class HomeActivity : Activity() {
             text = "Start KDE"
             setOnClickListener { startSession() }
         }
+        copyLogButton = Button(this).apply {
+            text = "Copy log"
+            setOnClickListener { copyLog() }
+        }
+        statusLog = TextView(this).apply {
+            typeface = Typeface.MONOSPACE
+            textSize = 10f
+            setTextColor(Color.rgb(170, 220, 170))
+            setTextIsSelectable(true)
+        }
         status = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -365,6 +386,9 @@ class HomeActivity : Activity() {
             addView(ProgressBar(this@HomeActivity))
             addView(statusText)
             addView(statusButton)
+            addView(copyLogButton)
+            addView(ScrollView(this@HomeActivity).apply { addView(statusLog) },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(260)))
         }
         root.addView(status, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
 
