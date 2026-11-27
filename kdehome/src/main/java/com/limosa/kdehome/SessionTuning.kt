@@ -14,7 +14,7 @@ import java.io.File
 object SessionTuning {
 
     /** Bump when [upgradeScript] gets a new step. Existing installs run the new steps once. */
-    const val UPGRADE_LEVEL = 4
+    const val UPGRADE_LEVEL = 5
 
     /** Background services hidden from KDE's autostart (no-ops or error spam inside proot). */
     private val DISABLED_AUTOSTART = listOf(
@@ -34,7 +34,9 @@ object SessionTuning {
         |if [ -n "${'$'}(dpkg --audit 2>/dev/null)" ] || ! apt-get check >/dev/null 2>&1; then
         |  echo '>>> Repairing packages from an install that was cut off'
         |  dpkg --configure -a --force-confdef --force-confold
-        |  apt-get -y -f install -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
+        |  # --no-remove: never let apt "fix" things by removing KDE or its apps.
+        |  apt-get -y -f --no-remove install -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold ||
+        |    echo '!!! Some packages could not be repaired without removing others; nothing was removed'
         |fi
         |""".trimMargin()
 
@@ -82,11 +84,24 @@ object SessionTuning {
                 |for p in pulseaudio pulseaudio-utils plasma-pa polkitd packagekit appstream plasma-discover; do
                 |  dpkg -s "${'$'}p" >/dev/null 2>&1 && continue
                 |  echo ">>> Installing ${'$'}p"
-                |  apt-get install -y --no-install-recommends "${'$'}p" || echo "(${'$'}p is not available; skipping)"
+                |  apt-get install -y --no-remove --no-install-recommends "${'$'}p" || echo "(${'$'}p is not available; skipping)"
                 |done
                 |echo '>>> Downloading the app catalogue for Discover'
                 |apt-get update || true
                 |appstreamcli refresh-cache --force >/dev/null 2>&1 || true
+                |""".trimMargin()
+        }
+        if (fromLevel < 5) {
+            // Put back KDE's apps if an earlier repair or install removed any.
+            steps += """
+                |echo '>>> Checking that KDE and its apps are all installed'
+                |apt-get update || true
+                |for p in kde-plasma-desktop plasma-workspace plasma-desktop kwin-x11 dolphin konsole systemsettings \
+                |         plasma-discover firefox-esr kate ark gwenview okular plasma-pa kglobalacceld; do
+                |  dpkg -s "${'$'}p" 2>/dev/null | grep -q '^Status: install ok installed' && continue
+                |  echo ">>> Installing ${'$'}p again"
+                |  apt-get install -y --no-remove --no-install-recommends "${'$'}p" || echo "(${'$'}p is not available; skipping)"
+                |done
                 |""".trimMargin()
         }
         if (steps.isEmpty()) return null
@@ -166,6 +181,15 @@ object SessionTuning {
             |  pulseaudio --daemonize=no --exit-idle-time=-1 --disallow-exit -n -F /etc/kdehome/pulse.pa \
             |    --disable-shm=true --realtime=false --high-priority=false --log-target=stderr --log-level=error &
             |fi
+            |# KDE's list of installed apps (ksycoca): menu, favourites, Android shortcuts. Rebuilt so
+            |# apps installed or removed while KDE wasn't running show up, and a broken one is replaced.
+            |if [ -f /etc/xdg/menus/plasma-applications.menu ]; then export XDG_MENU_PREFIX=plasma-
+            |elif [ -f /etc/xdg/menus/kf5-applications.menu ]; then export XDG_MENU_PREFIX=kf5-; fi
+            |export XDG_DATA_DIRS=/usr/local/share:/usr/share XDG_CONFIG_DIRS=/etc/xdg
+            |if [ ! -f ~/.cache/kdehome-sycoca-v1 ]; then rm -f ~/.cache/ksycoca*; mkdir -p ~/.cache; touch ~/.cache/kdehome-sycoca-v1; fi
+            |for k in kbuildsycoca6 kbuildsycoca5; do
+            |  command -v "${'$'}k" >/dev/null && { "${'$'}k" >/dev/null 2>&1; break; }
+            |done
             |exec startplasma-x11
             |""".trimMargin() + "\n"
         )
@@ -178,6 +202,38 @@ object SessionTuning {
      * login session for polkit to check. KDE Home is a single-user phone, so allow everything.
      */
     private fun writeSystemConfig(rootfs: File) {
+        // KDE Home's own system bus config. Debian's switches to the "messagebus" user, which
+        // fails under proot, and then nothing (Discover, devices, power) has a system bus.
+        val allowAll = """
+            |    <allow user="*"/>
+            |    <allow own="*"/>
+            |    <allow send_destination="*" eavesdrop="true"/>
+            |    <allow receive_sender="*"/>
+            |""".trimMargin()
+        writeIfChanged(
+            File(rootfs, "etc/kdehome/system-bus.conf"),
+            """
+            |<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+            | "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+            |<!-- Written by KDE Home: the system bus for a single-user phone under proot. -->
+            |<busconfig>
+            |  <type>system</type>
+            |  <listen>unix:path=/run/dbus/system_bus_socket</listen>
+            |  <auth>EXTERNAL</auth>
+            |  <auth>ANONYMOUS</auth>
+            |  <allow_anonymous/>
+            |  <standard_system_servicedirs/>
+            |  <policy context="default">
+            |$allowAll
+            |  </policy>
+            |  <includedir>/usr/share/dbus-1/system.d</includedir>
+            |  <includedir>/etc/dbus-1/system.d</includedir>
+            |  <policy context="mandatory">
+            |$allowAll
+            |  </policy>
+            |</busconfig>
+            |""".trimMargin(),
+        )
         writeIfChanged(
             File(rootfs, "etc/dbus-1/system-local.conf"),
             """

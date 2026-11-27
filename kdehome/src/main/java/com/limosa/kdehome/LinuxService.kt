@@ -269,7 +269,7 @@ class LinuxService : Service() {
             |mkdir -p /run/dbus /var/lib/dbus
             |rm -f /run/dbus/pid /run/dbus/system_bus_socket
             |dbus-uuidgen --ensure 2>/dev/null
-            |dbus-daemon --system --nofork --nopidfile &
+            |dbus-daemon --config-file=/etc/kdehome/system-bus.conf --nofork --nopidfile &
             |for i in ${'$'}(seq 50); do [ -S /run/dbus/system_bus_socket ] && break; sleep 0.1; done
             |# Android hides the network state from Linux (no netlink), so GLib would think the phone is
             |# offline and PackageKit would refuse to download. "base" always reports online.
@@ -373,7 +373,7 @@ class LinuxService : Service() {
         val script = """
             |export DEBIAN_FRONTEND=noninteractive
             |${SessionTuning.REPAIR}
-            |apt-get install -y $list || { echo '>>> Updating the package lists and trying again'; apt-get update && apt-get install -y $list; }
+            |apt-get install -y --no-remove $list || { echo '>>> Updating the package lists and trying again'; apt-get update && apt-get install -y --no-remove $list; }
             |""".trimMargin()
         thread(name = "apt-install") {
             // Internal storage/Linux/logs/apt.log, and the last apt error for the message.
