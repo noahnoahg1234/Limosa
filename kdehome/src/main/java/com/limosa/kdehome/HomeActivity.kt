@@ -469,6 +469,10 @@ class HomeActivity : Activity() {
             runCatching { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) }
         }
         item("Install Linux apps…") { askAptInstall() }
+        item("Update Linux") {
+            LinuxService.send(this, LinuxService.ACTION_SYSTEM_UPDATE)
+            Toast.makeText(this, "Updating all of Debian; the notification shows progress. KDE keeps running.", Toast.LENGTH_LONG).show()
+        }
         item("Show Linux log") { showLog() }
         item("Linux terminal as root") {
             LinuxService.send(this, LinuxService.ACTION_ROOT_TERMINAL)

@@ -54,6 +54,7 @@ class RootfsInstaller(
         configureRootfs()
         runApt(opts)
         configureUser()
+        File(paths.base, "last-system-update").writeText(System.currentTimeMillis().toString())
         paths.installedMarker.writeText(System.currentTimeMillis().toString())
         progress("Debian and KDE Plasma are installed", 100)
     }
@@ -330,6 +331,8 @@ class RootfsInstaller(
             |  useradd -m -o -u 1000 -s /bin/bash -c 'KDE Home user' user
             |fi
             |mkdir -p /home/user/Linux /home/user/Desktop /home/user/AndroidApps
+            |echo '>>> Updating everything to the newest versions'
+            |apt-get -y --with-new-pkgs -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade || true
             |apt-get clean
             |echo '>>> Packages installed'
             |""".trimMargin()

@@ -48,8 +48,26 @@ object SessionTuning {
             .containsMatchIn(status)
     }
 
-    /** Runs as fake root before the desktop starts, only for steps newer than the install. */
-    fun upgradeScript(fromLevel: Int): String? {
+    /**
+     * Brings every Debian package up to date. "upgrade" (not full-upgrade) never removes anything,
+     * and --with-new-pkgs lets it pull in new dependencies.
+     */
+    val SYSTEM_UPDATE = """
+        |echo '>>> Updating Debian (this can take a while the first time)'
+        |apt-get update
+        |apt-get -y --with-new-pkgs -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade
+        |apt-get clean
+        |echo '>>> Debian is up to date'
+        |""".trimMargin()
+
+    /** How often Linux updates itself when KDE starts. */
+    const val UPDATE_INTERVAL_MS = 7L * 24 * 60 * 60 * 1000
+
+    /**
+     * Runs as fake root before the desktop starts: steps newer than the install, plus a full
+     * Debian update when [systemUpdate].
+     */
+    fun upgradeScript(fromLevel: Int, systemUpdate: Boolean = false): String? {
         val steps = mutableListOf<String>()
         if (fromLevel < 2) {
             // Global shortcuts (the ❖ key opens the menu): Plasma 6 has kglobalacceld separately.
@@ -104,6 +122,7 @@ object SessionTuning {
                 |done
                 |""".trimMargin()
         }
+        if (systemUpdate) steps += SYSTEM_UPDATE
         if (steps.isEmpty()) return null
         return "export DEBIAN_FRONTEND=noninteractive\n" + REPAIR + "\n" + steps.joinToString("\n") + "\nexit 0\n"
     }

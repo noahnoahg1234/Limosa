@@ -87,6 +87,7 @@ class LinuxService : Service() {
             ACTION_HIDDEN -> scheduleFreeze()
             ACTION_ROOT_TERMINAL -> rootTerminal()
             ACTION_APT_INSTALL -> aptInstall(intent.getStringExtra(EXTRA_PACKAGES).orEmpty())
+            ACTION_SYSTEM_UPDATE -> systemUpdate()
         }
         return START_STICKY
     }
@@ -217,15 +218,25 @@ class LinuxService : Service() {
     private fun runUpgrades() {
         val marker = java.io.File(paths.base, "upgrade-level")
         val level = runCatching { marker.readText().trim().toInt() }.getOrDefault(1)
-        val script = SessionTuning.upgradeScript(level)
+        // A full Debian update once a week (and right away on installs that never had one).
+        val updated = java.io.File(paths.base, "last-system-update")
+        val lastUpdate = runCatching { updated.readText().trim().toLong() }.getOrDefault(0L)
+        val updateDue = System.currentTimeMillis() - lastUpdate > SessionTuning.UPDATE_INTERVAL_MS
+        val script = SessionTuning.upgradeScript(level, systemUpdate = updateDue)
             ?: if (SessionTuning.dpkgNeedsRepair(paths.rootfs)) "export DEBIAN_FRONTEND=noninteractive\n" + SessionTuning.REPAIR else return
-        LinuxState.set(LinuxState.Phase.STARTING, "Updating Linux for this version of KDE Home…")
+        LinuxState.set(LinuxState.Phase.STARTING, "Updating Linux…")
         updateNotification("Updating Linux")
         upgrading = true
         try {
             val p = proot.process(script, asUser = false).start()
-            p.inputStream.bufferedReader().forEachLine { LinuxState.log(it) }
-            if (p.waitFor() == 0) marker.writeText(SessionTuning.UPGRADE_LEVEL.toString())
+            p.inputStream.bufferedReader().forEachLine {
+                LinuxState.log(it)
+                showAptProgress(it)
+            }
+            if (p.waitFor() == 0) {
+                marker.writeText(SessionTuning.UPGRADE_LEVEL.toString())
+                if (updateDue) updated.writeText(System.currentTimeMillis().toString())
+            }
         } catch (e: Exception) {
             LinuxState.log("!!! Update step failed (${e.message}); it will be tried again next start")
         } finally {
@@ -365,19 +376,49 @@ class LinuxService : Service() {
     /** apt-get install as root, with the output in the log and the result in the notification. */
     private fun aptInstall(packages: String) {
         val names = packages.split(Regex("[\\s,]+")).filter { it.matches(Regex("[a-z0-9][a-z0-9+.-]*")) }
-        if (names.isEmpty() || aptBusy || installer != null) return
-        aptBusy = true
+        if (names.isEmpty()) return
         val list = names.joinToString(" ")
-        updateNotification("Installing $list…")
-        LinuxState.log(">>> Installing $list")
-        val script = """
+        runApt(
+            "Installing $list…",
+            """
             |export DEBIAN_FRONTEND=noninteractive
             |${SessionTuning.REPAIR}
             |apt-get install -y --no-remove $list || { echo '>>> Updating the package lists and trying again'; apt-get update && apt-get install -y --no-remove $list; }
-            |""".trimMargin()
-        thread(name = "apt-install") {
+            |""".trimMargin(),
+            "Installed $list. It's in the KDE menu.",
+            "Could not install $list",
+        )
+    }
+
+    /** Updates every Debian package now (menu › Update Linux). */
+    private fun systemUpdate() = runApt(
+        "Updating Linux…",
+        "export DEBIAN_FRONTEND=noninteractive\n${SessionTuning.REPAIR}\n${SessionTuning.SYSTEM_UPDATE}",
+        "Linux is up to date",
+        "Linux could not be fully updated",
+    ) { java.io.File(paths.base, "last-system-update").writeText(System.currentTimeMillis().toString()) }
+
+    /** Shows apt's progress in the notification ("Setting up …"). */
+    private fun showAptProgress(line: String) {
+        val text = when {
+            line.startsWith(">>> ") -> line.removePrefix(">>> ")
+            line.startsWith("Unpacking ") -> "Updating: " + line.removePrefix("Unpacking ").substringBefore(' ')
+            line.startsWith("Setting up ") -> "Setting up " + line.removePrefix("Setting up ").substringBefore(' ')
+            else -> return
+        }
+        LinuxState.progress(text, -1)
+        updateNotification(text)
+    }
+
+    /** Runs an apt script as root, logging to Internal storage/Linux/logs/apt.log. */
+    private fun runApt(title: String, script: String, okMsg: String, failMsg: String, onOk: () -> Unit = {}) {
+        if (aptBusy || installer != null) return
+        aptBusy = true
+        updateNotification(title)
+        LinuxState.log(">>> $title")
+        thread(name = "apt") {
             // Internal storage/Linux/logs/apt.log, and the last apt error for the message.
-            val log = java.io.File(paths.base, "apt.log").apply { writeText("apt install $list  ${java.util.Date()}\n") }
+            val log = java.io.File(paths.base, "apt.log").apply { writeText("$title  ${java.util.Date()}\n") }
             var lastError = ""
             val ok = try {
                 if (LinuxFreezer.frozen) LinuxFreezer.thaw()
@@ -385,6 +426,7 @@ class LinuxService : Service() {
                 p.inputStream.bufferedReader().forEachLine {
                     LinuxState.log(it)
                     log.appendText(it + "\n")
+                    showAptProgress(it)
                     if (it.startsWith("E:") || it.startsWith("dpkg: error")) lastError = it
                 }
                 p.waitFor() == 0
@@ -395,8 +437,8 @@ class LinuxService : Service() {
             }
             aptBusy = false
             paths.publishLog(log)
-            val msg = if (ok) "Installed $list. It's in the KDE menu."
-                else "Could not install $list: ${lastError.ifEmpty { "see Internal storage/Linux/logs/apt.log" }}"
+            if (ok) runCatching(onOk)
+            val msg = if (ok) okMsg else "$failMsg: ${lastError.ifEmpty { "see Internal storage/Linux/logs/apt.log" }}"
             LinuxState.log(">>> $msg")
             updateNotification(msg)
             main.post { android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show() }
@@ -478,6 +520,7 @@ class LinuxService : Service() {
         const val ACTION_VISIBLE = "com.limosa.kdehome.VISIBLE"
         const val ACTION_ROOT_TERMINAL = "com.limosa.kdehome.ROOT_TERMINAL"
         const val ACTION_APT_INSTALL = "com.limosa.kdehome.APT_INSTALL"
+        const val ACTION_SYSTEM_UPDATE = "com.limosa.kdehome.SYSTEM_UPDATE"
         const val ACTION_HIDDEN = "com.limosa.kdehome.HIDDEN"
         const val PREF_RESOURCE_SAVING = "resourceSaving"
         private const val FREEZE_DELAY_MS = 20_000L

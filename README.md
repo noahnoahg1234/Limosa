@@ -13,6 +13,9 @@ KDE Home is an Android **launcher** that installs Debian Linux with the
    20–60 minutes. You can leave the app; the notification shows progress.
 4. Tap **Set as default home screen** and choose KDE Home. From then on, the Home button shows KDE.
 
+**Debian updates itself:** on the first start after installing, and then once a week, KDE Home updates all of
+Debian before KDE starts (it never removes packages). Menu › **Update Linux** does it now.
+
 **Updating:** install a newer `kdehome.apk` over the old one. Linux stays installed; the next start updates it in
 place if the new version needs extra packages. (Builds before this one were signed with a different key each time,
 so if Android says the app can't be installed, uninstall the old build once. After that, updates just install.)
