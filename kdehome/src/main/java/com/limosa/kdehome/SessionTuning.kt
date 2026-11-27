@@ -14,7 +14,7 @@ import java.io.File
 object SessionTuning {
 
     /** Bump when [upgradeScript] gets a new step. Existing installs run the new steps once. */
-    const val UPGRADE_LEVEL = 3
+    const val UPGRADE_LEVEL = 4
 
     /** Background services hidden from KDE's autostart (no-ops or error spam inside proot). */
     private val DISABLED_AUTOSTART = listOf(
@@ -53,6 +53,22 @@ object SessionTuning {
                 |done
                 |""".trimMargin()
         }
+        if (fromLevel < 4) {
+            // Sound (PulseAudio + the KDE volume control) and what Discover needs to work:
+            // polkit (permissions), PackageKit, and AppStream data (the app catalogue).
+            steps += """
+                |echo '>>> Adding sound and app store support'
+                |apt-get update || true
+                |for p in pulseaudio pulseaudio-utils plasma-pa polkitd packagekit appstream plasma-discover; do
+                |  dpkg -s "${'$'}p" >/dev/null 2>&1 && continue
+                |  echo ">>> Installing ${'$'}p"
+                |  apt-get install -y --no-install-recommends "${'$'}p" || echo "(${'$'}p is not available; skipping)"
+                |done
+                |echo '>>> Downloading the app catalogue for Discover'
+                |apt-get update || true
+                |appstreamcli refresh-cache --force >/dev/null 2>&1 || true
+                |""".trimMargin()
+        }
         if (steps.isEmpty()) return null
         return "export DEBIAN_FRONTEND=noninteractive\n" + steps.joinToString("\n") + "\nexit 0\n"
     }
@@ -87,6 +103,8 @@ object SessionTuning {
         }
 
         pinApps(rootfs, home)
+        writeSystemConfig(rootfs)
+        writeSound(rootfs, home)
         writeSessionScript(rootfs)
     }
 
@@ -122,11 +140,81 @@ object SessionTuning {
             |for k in /usr/lib/*/libexec/kglobalacceld /usr/libexec/kglobalacceld /usr/lib/*/libexec/kf6/kglobalacceld; do
             |  if [ -x "${'$'}k" ]; then "${'$'}k" & break; fi
             |done
+            |# Sound: PulseAudio plays into a virtual sink that KDE Home streams to Android.
+            |if command -v pulseaudio >/dev/null; then
+            |  pulseaudio --kill 2>/dev/null
+            |  pulseaudio --daemonize=no --exit-idle-time=-1 --disallow-exit -n -F /etc/kdehome/pulse.pa \
+            |    --disable-shm=true --realtime=false --high-priority=false --log-target=stderr --log-level=error &
+            |fi
             |exec startplasma-x11
             |""".trimMargin() + "\n"
         )
         Os.chmod(f.absolutePath, 493)
     }
+
+    /**
+     * The system D-Bus and polkit, without the checks proot can't satisfy. Every Linux program here
+     * runs as the same Android user, so D-Bus sees one user ID for all of them, and there is no
+     * login session for polkit to check. KDE Home is a single-user phone, so allow everything.
+     */
+    private fun writeSystemConfig(rootfs: File) {
+        writeIfChanged(
+            File(rootfs, "etc/dbus-1/system-local.conf"),
+            """
+            |<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+            | "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+            |<!-- Written by KDE Home: everything on this bus is the phone's one user. -->
+            |<busconfig>
+            |  <auth>EXTERNAL</auth>
+            |  <auth>ANONYMOUS</auth>
+            |  <allow_anonymous/>
+            |  <policy context="mandatory">
+            |    <allow user="*"/>
+            |    <allow own="*"/>
+            |    <allow send_destination="*"/>
+            |    <allow receive_sender="*"/>
+            |  </policy>
+            |</busconfig>
+            |""".trimMargin(),
+        )
+        writeIfChanged(
+            File(rootfs, "etc/polkit-1/rules.d/49-kdehome.rules"),
+            "// Written by KDE Home: no password prompts (there is no login session under proot).\n" +
+                "polkit.addRule(function(action, subject) { return polkit.Result.YES; });\n",
+        )
+    }
+
+    private fun writeSound(rootfs: File, home: File) {
+        writeIfChanged(
+            File(rootfs, "etc/kdehome/pulse.pa"),
+            """
+            |# Written by KDE Home. Everything Linux plays goes to the "Android" sink; its monitor is
+            |# streamed as raw 48 kHz stereo to 127.0.0.1:$AUDIO_PORT, where the app plays it.
+            |.fail
+            |load-module module-null-sink sink_name=android rate=48000 sink_properties=device.description=Android
+            |set-default-sink android
+            |load-module module-native-protocol-unix auth-anonymous=1
+            |load-module module-simple-protocol-tcp source=android.monitor record=true playback=false port=$AUDIO_PORT listen=127.0.0.1 rate=48000 format=s16le channels=2
+            |.nofail
+            |# Stop streaming (and save battery) when nothing has played for a moment.
+            |load-module module-suspend-on-idle timeout=2
+            |load-module module-stream-restore
+            |load-module module-default-device-restore
+            |""".trimMargin(),
+        )
+        writeIfChanged(
+            File(home, ".config/pulse/client.conf"),
+            "# Written by KDE Home: use the server it starts.\nautospawn = no\ndefault-server = unix:/tmp/runtime-user/pulse/native\n",
+        )
+    }
+
+    private fun writeIfChanged(f: File, text: String) {
+        if (f.exists() && runCatching { f.readText() }.getOrNull() == text) return
+        f.parentFile?.mkdirs()
+        f.writeText(text)
+    }
+
+    const val AUDIO_PORT = 4712
 
     /** Sets key=value in [group] of a KDE ini file, keeping everything else in it. */
     fun setIni(file: File, group: String, key: String, value: String) {

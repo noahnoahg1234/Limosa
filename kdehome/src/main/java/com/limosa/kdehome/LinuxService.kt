@@ -142,6 +142,7 @@ class LinuxService : Service() {
             runCatching { SessionTuning.apply(paths.rootfs, paths.userHome) }
                 .onFailure { LinuxState.log("!!! Could not write KDE settings: ${it.message}") }
             startSystemBus()
+            audio.start()
             LinuxState.set(LinuxState.Phase.STARTING, "Starting KDE Plasma (${w}×$h)…")
             val started = System.currentTimeMillis()
             val p = try {
@@ -251,6 +252,7 @@ class LinuxService : Service() {
      * power services, need it. Runs as fake root in its own proot, beside the desktop.
      */
     @Volatile private var systemBus: Process? = null
+    private val audio = AudioBridge(SessionTuning.AUDIO_PORT)
 
     private fun startSystemBus() {
         if (systemBus?.isAlive == true) return
@@ -259,7 +261,17 @@ class LinuxService : Service() {
             |mkdir -p /run/dbus /var/lib/dbus
             |rm -f /run/dbus/pid /run/dbus/system_bus_socket
             |dbus-uuidgen --ensure 2>/dev/null
-            |exec dbus-daemon --system --nofork --nopidfile
+            |dbus-daemon --system --nofork --nopidfile &
+            |for i in ${'$'}(seq 50); do [ -S /run/dbus/system_bus_socket ] && break; sleep 0.1; done
+            |# Started directly: D-Bus can't start them itself here (its setuid helper doesn't work under proot).
+            |for p in /usr/lib/polkit-1/polkitd /usr/libexec/polkitd; do
+            |  [ -x "${'$'}p" ] && { "${'$'}p" --no-debug & break; }
+            |done
+            |for p in /usr/libexec/packagekitd /usr/lib/packagekit/packagekitd; do
+            |  # Discover's package manager; restarted if it quits.
+            |  [ -x "${'$'}p" ] && { while true; do "${'$'}p" --disable-timer || "${'$'}p"; sleep 2; done & break; }
+            |done
+            |wait
             |""".trimMargin()
         systemBus = runCatching { proot.process(script, asUser = false).start() }.getOrNull()?.also { p ->
             thread(name = "system-bus-log", isDaemon = true) {
@@ -277,6 +289,7 @@ class LinuxService : Service() {
         freezeTimer?.let { main.removeCallbacks(it) }
         if (LinuxFreezer.frozen) LinuxFreezer.thaw()   // stopped processes can't exit
         systemBus?.let { it.destroy(); systemBus = null }
+        audio.stop()
         val p = session ?: return
         session = null
         p.destroy()
