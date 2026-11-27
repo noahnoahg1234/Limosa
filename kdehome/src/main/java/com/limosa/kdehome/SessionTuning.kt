@@ -14,7 +14,7 @@ import java.io.File
 object SessionTuning {
 
     /** Bump when [upgradeScript] gets a new step. Existing installs run the new steps once. */
-    const val UPGRADE_LEVEL = 2
+    const val UPGRADE_LEVEL = 3
 
     /** Background services hidden from KDE's autostart (no-ops or error spam inside proot). */
     private val DISABLED_AUTOSTART = listOf(
@@ -36,6 +36,21 @@ object SessionTuning {
                 |apt-get install -y --no-install-recommends kglobalacceld 2>/dev/null ||
                 |  { apt-get update && apt-get install -y --no-install-recommends kglobalacceld; } ||
                 |  echo '(kglobalacceld is not in this Debian release; skipping)'
+                |""".trimMargin()
+        }
+        if (fromLevel < 3) {
+            // The main apps, one by one so a missing one doesn't stop the rest. Discover needs
+            // PackageKit (it talks to it over the system D-Bus, which KDE Home now starts).
+            steps += """
+                |updated=
+                |for p in dolphin firefox-esr plasma-discover packagekit dbus-daemon konsole systemsettings; do
+                |  dpkg -s "${'$'}p" >/dev/null 2>&1 && continue
+                |  echo ">>> Installing ${'$'}p"
+                |  if ! apt-get install -y --no-install-recommends "${'$'}p"; then
+                |    [ -z "${'$'}updated" ] && { apt-get update; updated=1; }
+                |    apt-get install -y --no-install-recommends "${'$'}p" || echo "(${'$'}p is not available; skipping)"
+                |  fi
+                |done
                 |""".trimMargin()
         }
         if (steps.isEmpty()) return null
@@ -71,7 +86,29 @@ object SessionTuning {
             if (!f.exists() || f.readText() != text) f.writeText(text)
         }
 
+        pinApps(rootfs, home)
         writeSessionScript(rootfs)
+    }
+
+    /** Main KDE apps on the desktop, once each (if you delete one, it stays deleted). */
+    private fun pinApps(rootfs: File, home: File) {
+        val desktop = File(home, "Desktop").apply { mkdirs() }
+        val record = File(home, ".config/kdehome-pinned")
+        val done = if (record.exists()) record.readLines().toMutableSet() else mutableSetOf()
+        var changed = false
+        for (name in listOf("org.kde.dolphin", "firefox-esr", "org.kde.discover", "org.kde.konsole", "systemsettings")) {
+            if (name in done) continue
+            val src = File(rootfs, "usr/share/applications/$name.desktop")
+            if (!src.exists()) continue
+            val dst = File(desktop, "$name.desktop")
+            if (!dst.exists()) {
+                src.copyTo(dst)
+                Os.chmod(dst.absolutePath, 493)   // KDE only runs desktop shortcuts that are executable
+            }
+            done += name
+            changed = true
+        }
+        if (changed) record.writeText(done.joinToString("\n") + "\n")
     }
 
     /** Runs inside dbus-launch: starts what systemd would normally start, then Plasma. */

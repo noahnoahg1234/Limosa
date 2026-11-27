@@ -129,9 +129,10 @@ class LinuxService : Service() {
         val noSeccomp = prefs.getBoolean(PREF_NO_SECCOMP, false)
         thread(name = "kde-session") {
             runCatching { shortcuts.sync() }
+            runUpgrades()   // first, so apps it installs are pinned to the desktop below
             runCatching { SessionTuning.apply(paths.rootfs, paths.userHome) }
                 .onFailure { LinuxState.log("!!! Could not write KDE settings: ${it.message}") }
-            runUpgrades()
+            startSystemBus()
             LinuxState.set(LinuxState.Phase.STARTING, "Starting KDE Plasma (${w}×$h)…")
             val started = System.currentTimeMillis()
             val p = try {
@@ -236,7 +237,35 @@ class LinuxService : Service() {
         }
     }
 
+    /**
+     * The system D-Bus (normally started by systemd). Discover/PackageKit, and KDE's device and
+     * power services, need it. Runs as fake root in its own proot, beside the desktop.
+     */
+    @Volatile private var systemBus: Process? = null
+
+    private fun startSystemBus() {
+        if (systemBus?.isAlive == true) return
+        val script = """
+            |[ -x /usr/bin/dbus-daemon ] || exit 0
+            |mkdir -p /run/dbus /var/lib/dbus
+            |rm -f /run/dbus/pid /run/dbus/system_bus_socket
+            |dbus-uuidgen --ensure 2>/dev/null
+            |exec dbus-daemon --system --nofork --nopidfile
+            |""".trimMargin()
+        systemBus = runCatching { proot.process(script, asUser = false).start() }.getOrNull()?.also { p ->
+            thread(name = "system-bus-log", isDaemon = true) {
+                p.inputStream.bufferedReader().forEachLine { LinuxState.log("dbus: $it") }
+            }
+        }
+        // Give it a moment to create its socket before Plasma looks for it.
+        repeat(20) {
+            if (java.io.File(paths.rootfs, "run/dbus/system_bus_socket").exists()) return
+            Thread.sleep(100)
+        }
+    }
+
     private fun stopSession() {
+        systemBus?.let { it.destroy(); systemBus = null }
         val p = session ?: return
         session = null
         p.destroy()
@@ -251,6 +280,9 @@ class LinuxService : Service() {
         |export XDG_CURRENT_DESKTOP=KDE KDE_FULL_SESSION=true DESKTOP_SESSION=plasma
         |export KWIN_COMPOSE=N LIBGL_ALWAYS_SOFTWARE=1 QT_X11_NO_MITSHM=1
         |export LANG=C.UTF-8 BROWSER=android-open NO_AT_BRIDGE=1 QT_ACCESSIBILITY=0
+        |# Firefox's sandbox needs kernel features proot can't provide.
+        |export MOZ_FAKE_NO_SANDBOX=1 MOZ_DISABLE_CONTENT_SANDBOX=1 MOZ_DISABLE_GMP_SANDBOX=1 \
+        |  MOZ_DISABLE_RDD_SANDBOX=1 MOZ_DISABLE_SOCKET_PROCESS_SANDBOX=1 MOZ_DISABLE_GPU_SANDBOX=1
         |mkdir -p "${'$'}XDG_RUNTIME_DIR" /tmp/.X11-unix
         |chmod 700 "${'$'}XDG_RUNTIME_DIR"; chmod 1777 /tmp/.X11-unix
         |rm -f /tmp/.X1-lock /tmp/.X11-unix/X1

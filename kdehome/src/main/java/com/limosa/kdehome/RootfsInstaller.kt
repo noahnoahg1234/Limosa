@@ -391,7 +391,7 @@ class RootfsInstaller(
         /** Installed one by one, so a missing name doesn't stop the install. */
         const val DEFAULT_EXTRAS = "systemsettings kate ark gwenview okular kde-spectacle plasma-systemmonitor " +
             "kinfocenter khelpcenter plasma-widgets-addons fonts-noto-core fonts-noto-color-emoji " +
-            "tigervnc-tools kglobalacceld locales sudo nano firefox-esr"
+            "tigervnc-tools kglobalacceld locales sudo nano firefox-esr plasma-discover packagekit dbus-daemon"
 
         private val ROOTFS_TOP_LEVEL = setOf(
             "bin", "boot", "dev", "etc", "home", "lib", "lib32", "lib64", "libx32", "media", "mnt",
