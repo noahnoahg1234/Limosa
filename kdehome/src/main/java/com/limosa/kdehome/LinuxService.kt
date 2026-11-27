@@ -25,6 +25,7 @@ import kotlin.concurrent.thread
 class LinuxService : Service() {
 
     private lateinit var paths: LinuxPaths
+    private val prefs by lazy { getSharedPreferences("linux", MODE_PRIVATE) }
     private lateinit var proot: Proot
     private lateinit var shortcuts: AndroidShortcuts
     private lateinit var bridge: AndroidBridge
@@ -125,17 +126,23 @@ class LinuxService : Service() {
         val h = (height.coerceIn(400, 4096) / 2) * 2
         LinuxState.set(LinuxState.Phase.STARTING, "Starting KDE Plasma (${w}×$h)…")
         updateNotification("Starting KDE Plasma")
+        val noSeccomp = prefs.getBoolean(PREF_NO_SECCOMP, false)
         thread(name = "kde-session") {
             runCatching { shortcuts.sync() }
+            val started = System.currentTimeMillis()
             val p = try {
-                proot.process(sessionScript(w, h), asUser = true).start()
+                proot.process(sessionScript(w, h), asUser = true, noSeccomp = noSeccomp).start()
             } catch (e: Exception) {
                 LinuxState.set(LinuxState.Phase.ERROR, "Could not start Linux: ${e.message}")
                 return@thread
             }
             session = p
             thread(name = "kde-ready", isDaemon = true) { waitForDisplay(p) }
-            paths.sessionLog.writeText("")
+            paths.sessionLog.writeText(
+                "KDE Home session ${java.util.Date()} · Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT}) · " +
+                    "${Build.MANUFACTURER} ${Build.MODEL} · kernel ${System.getProperty("os.version")} · " +
+                    "proot seccomp ${if (noSeccomp) "off" else "on"} · ${w}x$h\n"
+            )
             var written = 0L
             p.inputStream.bufferedReader().useLines { seq ->
                 for (line in seq) {
@@ -150,6 +157,18 @@ class LinuxService : Service() {
             paths.publishLog(paths.sessionLog)
             if (session === p) {
                 session = null
+                // proot itself crashed soon after starting: retry once without seccomp acceleration,
+                // and remember that this phone needs it off.
+                if (code > 128 && !noSeccomp && System.currentTimeMillis() - started < 5 * 60_000) {
+                    prefs.edit().putBoolean(PREF_NO_SECCOMP, true).apply()
+                    LinuxState.log("!!! KDE stopped with ${exitReason(code)}; retrying with proot seccomp acceleration off")
+                    java.io.File(paths.base, "session-previous.log").let {
+                        paths.sessionLog.renameTo(it)
+                        paths.publishLog(it)
+                    }
+                    startSession(width, height)
+                    return@thread
+                }
                 // Put the end of the session log on screen so a crash can be read and copied.
                 runCatching { paths.sessionLog.readLines().takeLast(40) }.getOrDefault(emptyList())
                     .forEach { LinuxState.log(it) }
@@ -206,9 +225,11 @@ class LinuxService : Service() {
         |trap 'kill ${'$'}XPID 2>/dev/null' EXIT
         |for i in ${'$'}(seq 100); do [ -e /tmp/.X11-unix/X1 ] && break; sleep 0.2; done
         |[ -e /tmp/.X11-unix/X1 ] || { echo '!!! Xvnc did not start'; exit 1; }
-        |echo '>>> Starting KDE Plasma'
+        |echo '>>> Xvnc is up, starting KDE Plasma'
         |dbus-launch --exit-with-session startplasma-x11
-        |echo "!!! KDE Plasma exited with code ${'$'}?"
+        |code=${'$'}?
+        |echo "!!! KDE Plasma exited with code ${'$'}code"
+        |exit ${'$'}code
         |""".trimMargin()
 
     // ---- Misc --------------------------------------------------------------------------------
@@ -249,6 +270,7 @@ class LinuxService : Service() {
         private const val CHANNEL = "linux"
         private const val NOTIFICATION_ID = 1
         const val VNC_PORT = 5901
+        private const val PREF_NO_SECCOMP = "prootNoSeccomp"
 
         const val ACTION_INSTALL = "com.limosa.kdehome.INSTALL"
         const val ACTION_START = "com.limosa.kdehome.START"

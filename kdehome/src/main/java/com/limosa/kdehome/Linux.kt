@@ -112,7 +112,11 @@ class Proot(private val paths: LinuxPaths) {
      * A process that runs [script] with bash inside Debian, as fake root or as `user` (uid 1000).
      * KDE apps refuse to run as root, so the desktop runs as `user`.
      */
-    fun process(script: String, asUser: Boolean): ProcessBuilder {
+    /**
+     * [noSeccomp]: turn off proot's seccomp acceleration. It is faster, but on some phones it makes
+     * proot abort (exit code 134) under a heavy load like a KDE session.
+     */
+    fun process(script: String, asUser: Boolean, noSeccomp: Boolean = false): ProcessBuilder {
         paths.prootTmp.mkdirs()
         val home = if (asUser) "/home/user" else "/root"
         val user = if (asUser) "user" else "root"
@@ -142,6 +146,7 @@ class Proot(private val paths: LinuxPaths) {
         env["TMPDIR"] = paths.prootTmp.absolutePath
         env["LD_LIBRARY_PATH"] = paths.libDir.absolutePath   // libtalloc
         env.remove("LD_PRELOAD")
+        if (noSeccomp) env["PROOT_NO_SECCOMP"] = "1"
         return pb
     }
 
