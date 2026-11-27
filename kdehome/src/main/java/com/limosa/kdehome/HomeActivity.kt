@@ -203,7 +203,8 @@ class HomeActivity : Activity() {
 
     /** Desktop pixels = screen pixels / scale. Bigger scale = bigger KDE UI. */
     private fun desktopScale(): Float {
-        val default = (resources.displayMetrics.density * 0.6f).coerceIn(1f, 2.5f)
+        // Fewer desktop pixels = faster drawing; ~0.75 × density keeps text readable on a phone.
+        val default = (resources.displayMetrics.density * 0.75f).coerceIn(1f, 3f)
         return prefs.getFloat("scale", (default * 4).roundToInt() / 4f)
     }
 

@@ -13,6 +13,10 @@ KDE Home is an Android **launcher** that installs Debian Linux with the
    20–60 minutes. You can leave the app; the notification shows progress.
 4. Tap **Set as default home screen** and choose KDE Home. From then on, the Home button shows KDE.
 
+**Updating:** install a newer `kdehome.apk` over the old one. Linux stays installed; the next start updates it in
+place if the new version needs extra packages. (Builds before this one were signed with a different key each time,
+so if Android says the app can't be installed, uninstall the old build once. After that, updates just install.)
+
 ## Android apps in KDE
 
 - KDE's app menu gets an **Android** section with every app on the phone.
@@ -52,6 +56,9 @@ LinuxService (foreground) ── proot (libproot.so) ── Debian rootfs ──
 - proot (from Termux's packages, bundled by `scripts/fetch_proot_termux.py`) runs Debian without root. The
   installer runs as fake root, and the desktop runs as `user` (uid 1000), because KDE apps refuse to run as root.
 - KDE runs with no compositor, screen locker or file indexer, since none of them help on a phone.
+- To stay light, KDE runs without animations, splash screen, session restore and the background services that do
+  nothing on a phone (Discover notifier, accessibility, PipeWire, power management…). If Android kills the session
+  anyway, KDE Home restarts it once by itself.
 - **Android 12+** may kill Linux programs (the "phantom process" limit). If KDE keeps closing, turn on
   *Developer options › Disable child process restrictions* (Android 14+), or run
   `adb shell device_config put activity_manager max_phantom_processes 2147483647`.

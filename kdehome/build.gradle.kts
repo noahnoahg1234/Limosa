@@ -21,10 +21,25 @@ android {
         }
     }
 
+    // One fixed key for every build. CI otherwise signs each build with a new random debug key,
+    // and Android refuses to update an app whose key changed, so updating meant uninstalling,
+    // which deletes Linux. This key is public (sideloading only): don't use it for a store release.
+    signingConfigs {
+        create("sideload") {
+            storeFile = file("signing.keystore")
+            storePassword = "kdehome-sideload"
+            keyAlias = "kdehome"
+            keyPassword = "kdehome-sideload"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("sideload")
+        }
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("sideload")
         }
     }
 

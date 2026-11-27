@@ -129,6 +129,10 @@ class LinuxService : Service() {
         val noSeccomp = prefs.getBoolean(PREF_NO_SECCOMP, false)
         thread(name = "kde-session") {
             runCatching { shortcuts.sync() }
+            runCatching { SessionTuning.apply(paths.rootfs, paths.userHome) }
+                .onFailure { LinuxState.log("!!! Could not write KDE settings: ${it.message}") }
+            runUpgrades()
+            LinuxState.set(LinuxState.Phase.STARTING, "Starting KDE Plasma (${w}×$h)…")
             val started = System.currentTimeMillis()
             val p = try {
                 proot.process(sessionScript(w, h), asUser = true, noSeccomp = noSeccomp).start()
@@ -157,24 +161,56 @@ class LinuxService : Service() {
             paths.publishLog(paths.sessionLog)
             if (session === p) {
                 session = null
-                // proot itself crashed soon after starting: retry once without seccomp acceleration,
-                // and remember that this phone needs it off.
-                if (code > 128 && !noSeccomp && System.currentTimeMillis() - started < 5 * 60_000) {
+                val signal = if (code > 128) code - 128 else 0
+                val now = System.currentTimeMillis()
+                fun keepLog() = java.io.File(paths.base, "session-previous.log").let {
+                    paths.sessionLog.renameTo(it)
+                    paths.publishLog(it)
+                }
+                // proot crashed (abort, segfault, blocked syscall) soon after starting: retry once
+                // without seccomp acceleration, and remember that this phone needs it off.
+                if (signal in CRASH_SIGNALS && !noSeccomp && now - started < 5 * 60_000) {
                     prefs.edit().putBoolean(PREF_NO_SECCOMP, true).apply()
                     LinuxState.log("!!! KDE stopped with ${exitReason(code)}; retrying with proot seccomp acceleration off")
-                    java.io.File(paths.base, "session-previous.log").let {
-                        paths.sessionLog.renameTo(it)
-                        paths.publishLog(it)
-                    }
+                    keepLog()
+                    startSession(width, height)
+                    return@thread
+                }
+                // Android killed it (SIGKILL): restart, but not in a loop.
+                if (signal == 9 && now - lastAutoRestart > 10 * 60_000) {
+                    lastAutoRestart = now
+                    LinuxState.log("!!! Android killed Linux (SIGKILL); restarting KDE once")
+                    keepLog()
                     startSession(width, height)
                     return@thread
                 }
                 // Put the end of the session log on screen so a crash can be read and copied.
                 runCatching { paths.sessionLog.readLines().takeLast(40) }.getOrDefault(emptyList())
                     .forEach { LinuxState.log(it) }
-                LinuxState.set(LinuxState.Phase.STOPPED, "KDE stopped: ${exitReason(code)}")
+                val hint = if (signal == 9) "\n\nAndroid killed Linux. To stop that: Developer options › Disable child process " +
+                    "restrictions (Android 14+), or once over adb: adb shell device_config put activity_manager " +
+                    "max_phantom_processes 2147483647 — and set KDE Home's battery use to Unrestricted." else ""
+                LinuxState.set(LinuxState.Phase.STOPPED, "KDE stopped: ${exitReason(code)}$hint")
                 updateNotification("KDE stopped")
             }
+        }
+    }
+
+    @Volatile private var lastAutoRestart = 0L
+
+    /** Brings an existing install up to date (new packages etc.) instead of asking for a reinstall. */
+    private fun runUpgrades() {
+        val marker = java.io.File(paths.base, "upgrade-level")
+        val level = runCatching { marker.readText().trim().toInt() }.getOrDefault(1)
+        val script = SessionTuning.upgradeScript(level) ?: return
+        LinuxState.set(LinuxState.Phase.STARTING, "Updating Linux for this version of KDE Home…")
+        updateNotification("Updating Linux")
+        try {
+            val p = proot.process(script, asUser = false).start()
+            p.inputStream.bufferedReader().forEachLine { LinuxState.log(it) }
+            if (p.waitFor() == 0) marker.writeText(SessionTuning.UPGRADE_LEVEL.toString())
+        } catch (e: Exception) {
+            LinuxState.log("!!! Update step failed (${e.message}); it will be tried again next start")
         }
     }
 
@@ -214,7 +250,7 @@ class LinuxService : Service() {
         |export DISPLAY=:1 XDG_RUNTIME_DIR=/tmp/runtime-user XDG_SESSION_TYPE=x11
         |export XDG_CURRENT_DESKTOP=KDE KDE_FULL_SESSION=true DESKTOP_SESSION=plasma
         |export KWIN_COMPOSE=N LIBGL_ALWAYS_SOFTWARE=1 QT_X11_NO_MITSHM=1
-        |export LANG=C.UTF-8 BROWSER=android-open
+        |export LANG=C.UTF-8 BROWSER=android-open NO_AT_BRIDGE=1 QT_ACCESSIBILITY=0
         |mkdir -p "${'$'}XDG_RUNTIME_DIR" /tmp/.X11-unix
         |chmod 700 "${'$'}XDG_RUNTIME_DIR"; chmod 1777 /tmp/.X11-unix
         |rm -f /tmp/.X1-lock /tmp/.X11-unix/X1
@@ -226,7 +262,7 @@ class LinuxService : Service() {
         |for i in ${'$'}(seq 100); do [ -e /tmp/.X11-unix/X1 ] && break; sleep 0.2; done
         |[ -e /tmp/.X11-unix/X1 ] || { echo '!!! Xvnc did not start'; exit 1; }
         |echo '>>> Xvnc is up, starting KDE Plasma'
-        |dbus-launch --exit-with-session startplasma-x11
+        |dbus-launch --exit-with-session /usr/local/bin/kdehome-session
         |code=${'$'}?
         |echo "!!! KDE Plasma exited with code ${'$'}code"
         |exit ${'$'}code
@@ -270,7 +306,9 @@ class LinuxService : Service() {
         private const val CHANNEL = "linux"
         private const val NOTIFICATION_ID = 1
         const val VNC_PORT = 5901
-        private const val PREF_NO_SECCOMP = "prootNoSeccomp"
+        // v2: the first version also turned it off after Android's SIGKILL, which isn't a proot crash.
+        private const val PREF_NO_SECCOMP = "prootNoSeccomp2"
+        private val CRASH_SIGNALS = setOf(4, 6, 7, 11, 31)
 
         const val ACTION_INSTALL = "com.limosa.kdehome.INSTALL"
         const val ACTION_START = "com.limosa.kdehome.START"
