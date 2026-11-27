@@ -21,9 +21,14 @@ so if Android says the app can't be installed, uninstall the old build once. Aft
 
 - KDE's app menu gets an **Android** section with every app on the phone.
 - The KDE desktop has an **Android Apps** folder, and the phone, messages, camera, browser, Play Store and
-  Settings are placed on it directly. In the ▦ drawer, long-press an app and choose **Add to KDE desktop** to add more.
-- The ▦ button on the right edge opens the Android app drawer, the keyboard (with Esc, Tab, Ctrl, Alt, ❖, arrows
-  and F-keys), clipboard paste, the desktop size setting, Restart KDE and Stop Linux. Drag it up or down to move it.
+  Settings are placed on it directly. In the Android app drawer, long-press an app and choose **Add to KDE desktop**.
+- **Swipe in from the right edge** (to the left) for the menu: Android apps, PC keyboard, clipboard paste, desktop
+  size, resource saving, Restart KDE, Stop Linux.
+- **Swipe in from the left edge** (to the right) for the **PC keyboard**: Esc, F1–F12, number row, Tab, Caps, Shift,
+  Ctrl, Alt, ❖, arrows, Home/End/PgUp/PgDn. Tap Shift/Ctrl/Alt once for the next key, twice to lock them.
+  KDE shrinks to fit above the keyboard. Swipe again or tap ▼ to hide it.
+- The PC keyboard also works in every other Android app: menu › **Use the PC keyboard in all apps**, then turn on
+  *KDE Home PC Keyboard*.
 - Shortcuts update by themselves when you install or remove apps.
 - In a Linux terminal: `android-launch com.android.chrome`, `android-open https://kde.org`. Linux programs that
   open links (`BROWSER`) open them on Android.
@@ -48,7 +53,7 @@ app's own internal storage, which Android removes when you uninstall the app.
 
 ```
 HomeActivity (HOME launcher) ── VncView ◄── RFB 127.0.0.1:5901 ── Xvnc :1 ◄── KDE Plasma (startplasma-x11)
-       │ ▦ drawer / keys                                              ▲
+       │ edge swipes: menu / PC keyboard                              ▲
 LinuxService (foreground) ── proot (libproot.so) ── Debian rootfs ────┘
        └─ AndroidBridge 127.0.0.1:7790 ◄── android-launch / .desktop shortcuts (token-protected)
 ```
@@ -56,6 +61,9 @@ LinuxService (foreground) ── proot (libproot.so) ── Debian rootfs ──
 - proot (from Termux's packages, bundled by `scripts/fetch_proot_termux.py`) runs Debian without root. The
   installer runs as fake root, and the desktop runs as `user` (uid 1000), because KDE apps refuse to run as root.
 - KDE runs with no compositor, screen locker or file indexer, since none of them help on a phone.
+- **Resource saving** (on by default, in the menu): when KDE isn't on screen (screen off, or another app open), every
+  Linux program is paused after 20 seconds and uses no CPU, then continues as soon as you're back. The display
+  is limited to 30 frames a second. Turn it off if something in Linux should keep running in the background.
 - To stay light, KDE runs without animations, splash screen, session restore and the background services that do
   nothing on a phone (Discover notifier, accessibility, PipeWire, power management…). If Android kills the session
   anyway, KDE Home restarts it once by itself.

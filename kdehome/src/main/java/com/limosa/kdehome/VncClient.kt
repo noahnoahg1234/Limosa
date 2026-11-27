@@ -168,6 +168,9 @@ class VncClient(private val host: String, private val port: Int, private val lis
                 0 -> {
                     framebufferUpdate(input)
                     listener.onFramebufferUpdated()
+                    // At most ~30 frames a second: plenty for a desktop, and half the work of 60.
+                    val wait = lastRequest + MIN_FRAME_MS - System.currentTimeMillis()
+                    if (wait > 0) Thread.sleep(wait)
                     requestUpdate(o, incremental = true)
                 }
                 1 -> { // SetColourMapEntries (not used in true colour)
@@ -188,7 +191,10 @@ class VncClient(private val host: String, private val port: Int, private val lis
         }
     }
 
+    private var lastRequest = 0L
+
     private fun requestUpdate(o: DataOutputStream, incremental: Boolean) {
+        lastRequest = System.currentTimeMillis()
         synchronized(o) {
             o.writeByte(3)
             o.writeByte(if (incremental) 1 else 0)
@@ -255,6 +261,10 @@ class VncClient(private val host: String, private val port: Int, private val lis
             height = h
             bitmap = Bitmap.createBitmap(w.coerceAtLeast(1), h.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
         }
+    }
+
+    private companion object {
+        const val MIN_FRAME_MS = 33L
     }
 
     private fun reason(input: DataInputStream): String {

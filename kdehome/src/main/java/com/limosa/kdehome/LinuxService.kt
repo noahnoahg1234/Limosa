@@ -76,6 +76,15 @@ class LinuxService : Service() {
                 stopSelf()
             }
             ACTION_SYNC -> syncShortcutsAsync()
+            ACTION_VISIBLE -> {
+                freezeTimer?.let { main.removeCallbacks(it) }
+                freezeTimer = null
+                if (LinuxFreezer.frozen) thread(name = "thaw") {
+                    LinuxFreezer.thaw()
+                    updateNotification("KDE Plasma is running")
+                }
+            }
+            ACTION_HIDDEN -> scheduleFreeze()
         }
         return START_STICKY
     }
@@ -265,6 +274,8 @@ class LinuxService : Service() {
     }
 
     private fun stopSession() {
+        freezeTimer?.let { main.removeCallbacks(it) }
+        if (LinuxFreezer.frozen) LinuxFreezer.thaw()   // stopped processes can't exit
         systemBus?.let { it.destroy(); systemBus = null }
         val p = session ?: return
         session = null
@@ -287,7 +298,7 @@ class LinuxService : Service() {
         |chmod 700 "${'$'}XDG_RUNTIME_DIR"; chmod 1777 /tmp/.X11-unix
         |rm -f /tmp/.X1-lock /tmp/.X11-unix/X1
         |echo ">>> Starting Xvnc ${w}x$h"
-        |Xvnc :1 -geometry ${w}x$h -depth 24 -dpi 96 -localhost -rfbport $VNC_PORT \
+        |Xvnc :1 -geometry ${w}x$h -depth 24 -dpi 96 -localhost -rfbport $VNC_PORT -FrameRate ${if (resourceSaving()) 30 else 60} \
         |  -SecurityTypes None -AlwaysShared -ac -nolisten tcp &
         |XPID=${'$'}!
         |trap 'kill ${'$'}XPID 2>/dev/null' EXIT
@@ -299,6 +310,30 @@ class LinuxService : Service() {
         |echo "!!! KDE Plasma exited with code ${'$'}code"
         |exit ${'$'}code
         |""".trimMargin()
+
+    // ---- Resource saving -----------------------------------------------------------------------
+
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+    private var freezeTimer: Runnable? = null
+
+    private fun resourceSaving() = getSharedPreferences("home", MODE_PRIVATE).getBoolean(PREF_RESOURCE_SAVING, true)
+
+    /** KDE left the screen: pause Linux after a short delay (not during an install or update). */
+    private fun scheduleFreeze() {
+        if (!resourceSaving()) return
+        freezeTimer?.let { main.removeCallbacks(it) }
+        val r = Runnable {
+            freezeTimer = null
+            if (installer == null && session?.isAlive == true && LinuxState.phase == LinuxState.Phase.RUNNING) {
+                thread(name = "freeze") {
+                    LinuxFreezer.freeze()
+                    if (LinuxFreezer.frozen) updateNotification("Paused to save battery · opens again with KDE")
+                }
+            }
+        }
+        freezeTimer = r
+        main.postDelayed(r, FREEZE_DELAY_MS)
+    }
 
     // ---- Misc --------------------------------------------------------------------------------
 
@@ -346,6 +381,10 @@ class LinuxService : Service() {
         const val ACTION_START = "com.limosa.kdehome.START"
         const val ACTION_STOP = "com.limosa.kdehome.STOP"
         const val ACTION_SYNC = "com.limosa.kdehome.SYNC"
+        const val ACTION_VISIBLE = "com.limosa.kdehome.VISIBLE"
+        const val ACTION_HIDDEN = "com.limosa.kdehome.HIDDEN"
+        const val PREF_RESOURCE_SAVING = "resourceSaving"
+        private const val FREEZE_DELAY_MS = 20_000L
         const val EXTRA_URL = "url"
         const val EXTRA_PACKAGES = "packages"
         const val EXTRA_RECOMMENDS = "recommends"

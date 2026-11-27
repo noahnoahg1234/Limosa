@@ -8,12 +8,19 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
+import android.view.inputmethod.InputMethodManager
+import android.window.BackEvent
+import android.window.OnBackAnimationCallback
+import android.window.OnBackInvokedCallback
+import android.window.OnBackInvokedDispatcher
+import android.view.ViewConfiguration
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -22,9 +29,7 @@ import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
-import android.widget.PopupMenu
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
@@ -34,7 +39,8 @@ import kotlin.math.roundToInt
 
 /**
  * The Android home screen. Until Linux is installed it shows the installer; afterwards it is
- * the KDE Plasma desktop, with a floating button for Android apps and the keyboard.
+ * the KDE Plasma desktop. Swipe in from the right edge for the menu (Android apps, settings) and
+ * from the left edge for the PC keyboard; KDE shrinks to fit above the keyboard.
  */
 class HomeActivity : Activity() {
 
@@ -51,9 +57,10 @@ class HomeActivity : Activity() {
     private lateinit var copyLogButton: Button
     private lateinit var setup: ScrollView
     private lateinit var drawer: AppDrawer
-    private lateinit var keys: HorizontalScrollView
-    private lateinit var fab: TextView
-    private val latchButtons = HashMap<Int, TextView>()
+    private lateinit var keyboard: PcKeyboardView
+    private lateinit var sideMenu: LinearLayout
+    private lateinit var scrim: View
+    private lateinit var savingItem: TextView
 
     // Setup screen widgets
     private lateinit var setupStatus: TextView
@@ -79,6 +86,7 @@ class HomeActivity : Activity() {
             LinuxState.set(LinuxState.Phase.STOPPED, "")
         }
         buildUi()
+        registerBack()
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2)
         }
@@ -97,6 +105,21 @@ class HomeActivity : Activity() {
         super.onPause()
     }
 
+    override fun onStart() {
+        super.onStart()
+        if (linuxActive()) LinuxService.send(this, LinuxService.ACTION_VISIBLE)
+    }
+
+    override fun onStop() {
+        // Resource saving: nothing to draw while KDE isn't on screen, and Linux pauses after a moment.
+        disconnect()
+        if (linuxActive()) LinuxService.send(this, LinuxService.ACTION_HIDDEN)
+        super.onStop()
+    }
+
+    private fun linuxActive() =
+        LinuxState.phase == LinuxState.Phase.RUNNING || LinuxState.phase == LinuxState.Phase.STARTING
+
     override fun onDestroy() {
         disconnect()
         super.onDestroy()
@@ -106,13 +129,109 @@ class HomeActivity : Activity() {
         super.onNewIntent(intent)
         // The Home button while we are already in front: close overlays, back to the desktop.
         showDrawer(false)
+        showMenu(false)
     }
 
-    @Deprecated("Home screens ignore Back, except to close overlays")
-    override fun onBackPressed() {
+    @Deprecated("Android 13+ uses the back callbacks registered in registerBack()")
+    override fun onBackPressed() = handleBack(0)
+
+    // ---- Gestures ----------------------------------------------------------------------------
+
+    private var backEdge = -1
+
+    /**
+     * With gesture navigation, Android turns edge swipes into Back. On Android 14+ we learn which
+     * edge it came from: from the right edge = menu, from the left edge = keyboard.
+     */
+    private fun registerBack() {
+        if (Build.VERSION.SDK_INT >= 34) {
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(
+                OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                object : OnBackAnimationCallback {
+                    override fun onBackStarted(backEvent: BackEvent) { backEdge = backEvent.swipeEdge }
+                    override fun onBackCancelled() { backEdge = -1 }
+                    override fun onBackInvoked() {
+                        val edge = backEdge
+                        backEdge = -1
+                        handleBack(
+                            when (edge) {
+                                BackEvent.EDGE_LEFT -> -1
+                                BackEvent.EDGE_RIGHT -> 1
+                                else -> 0
+                            }
+                        )
+                    }
+                },
+            )
+        } else if (Build.VERSION.SDK_INT >= 33) {
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(
+                OnBackInvokedDispatcher.PRIORITY_DEFAULT, OnBackInvokedCallback { handleBack(0) },
+            )
+        }
+    }
+
+    /** [edge]: -1 swipe from the left edge, 1 from the right edge, 0 the Back button. */
+    private fun handleBack(edge: Int) {
         when {
+            setup.visibility == View.VISIBLE -> Unit
+            sideMenu.visibility == View.VISIBLE -> showMenu(false)
             drawer.visibility == View.VISIBLE -> showDrawer(false)
-            keys.visibility == View.VISIBLE -> showKeys(false)
+            edge == -1 -> showKeys(keyboard.visibility != View.VISIBLE)
+            edge == 1 -> showMenu(true)
+            keyboard.visibility == View.VISIBLE -> showKeys(false)
+            else -> showMenu(true)
+        }
+    }
+
+    /** [edge]: -1 swiped in from the left edge (to the right), 1 from the right edge (to the left). */
+    private fun onEdgeSwipe(edge: Int) {
+        if (edge > 0) showMenu(sideMenu.visibility != View.VISIBLE) else showKeys(keyboard.visibility != View.VISIBLE)
+    }
+
+    private fun swipesAllowed() = setup.visibility != View.VISIBLE && drawer.visibility != View.VISIBLE
+
+    /** Catches swipes that start at the left or right edge before KDE sees them as a mouse drag. */
+    private inner class EdgeSwipeLayout : FrameLayout(this@HomeActivity) {
+        private val edgeWidth = dp(28).toFloat()
+        private val triggerDistance = dp(56).toFloat()
+        private val slop = ViewConfiguration.get(context).scaledTouchSlop / 2f
+        private var fromEdge = 0
+        private var startX = 0f
+        private var startY = 0f
+        private var fired = false
+
+        private fun inward(x: Float) = if (fromEdge < 0) x - startX else startX - x
+
+        override fun onInterceptTouchEvent(e: MotionEvent): Boolean {
+            if (!swipesAllowed()) return false
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    startX = e.x; startY = e.y; fired = false
+                    fromEdge = when {
+                        e.x < edgeWidth -> -1
+                        e.x > width - edgeWidth -> 1
+                        else -> 0
+                    }
+                }
+                MotionEvent.ACTION_MOVE -> if (fromEdge != 0) {
+                    val dx = inward(e.x)
+                    if (dx > slop && dx > abs(e.y - startY)) return true   // VNC gets CANCEL, no click
+                }
+            }
+            return false
+        }
+
+        override fun onTouchEvent(e: MotionEvent): Boolean {
+            if (fromEdge == 0) return false
+            when (e.actionMasked) {
+                MotionEvent.ACTION_MOVE -> if (!fired && inward(e.x) > triggerDistance) {
+                    fired = true
+                    performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+                    onEdgeSwipe(fromEdge)
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> fromEdge = 0
+            }
+            return true
         }
     }
 
@@ -123,7 +242,6 @@ class HomeActivity : Activity() {
         val installed = paths.isInstalled
         val showSetup = !installed || phase == LinuxState.Phase.INSTALLING
         setup.visibility = if (showSetup) View.VISIBLE else View.GONE
-        fab.visibility = if (showSetup) View.GONE else View.VISIBLE
         if (showSetup) {
             renderSetup()
             return
@@ -211,7 +329,17 @@ class HomeActivity : Activity() {
     private fun connect() {
         if (client != null) return
         val c = VncClient("127.0.0.1", LinuxService.VNC_PORT, object : VncClient.Listener {
-            override fun onConnected(width: Int, height: Int) = runOnUiThread { render() }
+            override fun onConnected(width: Int, height: Int) = runOnUiThread {
+                render()
+                if (!prefs.getBoolean("swipeHintShown", false)) {
+                    prefs.edit().putBoolean("swipeHintShown", true).apply()
+                    Toast.makeText(
+                        this@HomeActivity,
+                        "Swipe in from the right edge for the menu, from the left edge for the keyboard",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
             override fun onFramebufferUpdated() {
                 vnc.postInvalidateOnAnimation()
                 if (status.visibility == View.VISIBLE) runOnUiThread { render() }
@@ -277,32 +405,74 @@ class HomeActivity : Activity() {
 
     // ---- Menu ------------------------------------------------------------------------------
 
-    private fun showMenu() {
-        PopupMenu(this, fab).apply {
-            menu.add("Android apps").setOnMenuItemClickListener { showDrawer(true); true }
-            menu.add("Keyboard").setOnMenuItemClickListener { showKeys(true); vnc.showKeyboard(); true }
-            menu.add("Paste Android clipboard").setOnMenuItemClickListener {
-                val text = getSystemService(ClipboardManager::class.java)?.primaryClip?.getItemAt(0)?.coerceToText(this@HomeActivity)
-                if (text != null) {
-                    client?.clipboard(text.toString())
-                    vnc.typeText(text)
-                }
-                true
-            }
-            menu.add("Update Android shortcuts in KDE").setOnMenuItemClickListener {
-                LinuxService.send(this@HomeActivity, LinuxService.ACTION_SYNC)
-                Toast.makeText(this@HomeActivity, "KDE menu › Android and the Android Apps folder are being updated", Toast.LENGTH_SHORT).show()
-                true
-            }
-            menu.add("Desktop size…").setOnMenuItemClickListener { chooseScale(); true }
-            menu.add("Restart KDE").setOnMenuItemClickListener { restartKde(); true }
-            menu.add("Stop Linux").setOnMenuItemClickListener { stopLinux(); true }
-            menu.add("Choose default home app").setOnMenuItemClickListener { openHomeSettings(); true }
-            menu.add("Android settings").setOnMenuItemClickListener {
-                startActivity(Intent(Settings.ACTION_SETTINGS)); true
-            }
-            show()
+    private fun showMenu(show: Boolean) {
+        if (show) {
+            savingItem.text = "Resource saving: " + if (resourceSaving()) "on" else "off"
+            vnc.hideKeyboard()
         }
+        sideMenu.visibility = if (show) View.VISIBLE else View.GONE
+        scrim.visibility = sideMenu.visibility
+    }
+
+    private fun resourceSaving() = prefs.getBoolean(LinuxService.PREF_RESOURCE_SAVING, true)
+
+    private fun buildMenu(): LinearLayout {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.argb(240, 35, 38, 41))
+            setPadding(dp(8), dp(16), dp(8), dp(16))
+            elevation = dp(8).toFloat()
+            isClickable = true
+        }
+        fun item(label: String, action: () -> Unit): TextView = TextView(this).apply {
+            text = label
+            setTextColor(Color.WHITE)
+            textSize = 15f
+            setPadding(dp(14), dp(13), dp(14), dp(13))
+            setOnClickListener { showMenu(false); action() }
+            col.addView(this)
+        }
+        col.addView(TextView(this).apply {
+            text = "KDE Home"
+            setTextColor(Color.rgb(29, 153, 243))
+            textSize = 18f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(dp(14), 0, dp(14), dp(10))
+        })
+        item("Android apps") { showDrawer(true) }
+        item("PC keyboard") { showKeys(true) }
+        item("Android keyboard") { showKeys(false); vnc.showKeyboard() }
+        item("Paste Android clipboard") {
+            val text = getSystemService(ClipboardManager::class.java)?.primaryClip?.getItemAt(0)?.coerceToText(this)
+            if (text != null) {
+                client?.clipboard(text.toString())
+                vnc.typeText(text)
+            }
+        }
+        item("Update Android shortcuts in KDE") {
+            LinuxService.send(this, LinuxService.ACTION_SYNC)
+            Toast.makeText(this, "KDE menu › Android and the Android Apps folder are being updated", Toast.LENGTH_SHORT).show()
+        }
+        item("Desktop size…") { chooseScale() }
+        savingItem = item("Resource saving") {
+            val on = !resourceSaving()
+            prefs.edit().putBoolean(LinuxService.PREF_RESOURCE_SAVING, on).apply()
+            Toast.makeText(
+                this,
+                if (on) "Resource saving on: Linux pauses when KDE isn't on screen (restart KDE for the 30 fps limit)"
+                else "Resource saving off: Linux keeps running in the background",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+        item("Use the PC keyboard in all apps") {
+            Toast.makeText(this, "Turn on \"KDE Home PC Keyboard\", then pick it", Toast.LENGTH_LONG).show()
+            runCatching { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) }
+        }
+        item("Restart KDE") { restartKde() }
+        item("Stop Linux") { stopLinux() }
+        item("Choose default home app") { openHomeSettings() }
+        item("Android settings") { startActivity(Intent(Settings.ACTION_SETTINGS)) }
+        return col
     }
 
     private fun chooseScale() {
@@ -332,9 +502,13 @@ class HomeActivity : Activity() {
         drawer.visibility = if (show) View.VISIBLE else View.GONE
     }
 
+    /** The PC keyboard; the desktop shrinks to fit above it. */
     private fun showKeys(show: Boolean) {
-        keys.visibility = if (show) View.VISIBLE else View.GONE
-        if (!show) vnc.hideKeyboard()
+        if (show) {
+            vnc.hideKeyboard()
+            showMenu(false)
+        }
+        keyboard.visibility = if (show) View.VISIBLE else View.GONE
     }
 
     // ---- UI construction -------------------------------------------------------------------
@@ -342,7 +516,7 @@ class HomeActivity : Activity() {
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     private fun buildUi() {
-        root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
+        root = EdgeSwipeLayout().apply { setBackgroundColor(Color.BLACK) }
         // Android 15 draws apps edge to edge: keep KDE clear of the status bar, navigation bar and keyboard.
         root.setOnApplyWindowInsetsListener { v, insets ->
             if (Build.VERSION.SDK_INT >= 30) {
@@ -357,8 +531,14 @@ class HomeActivity : Activity() {
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         vnc = VncView(this)
         content.addView(vnc, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        keys = buildKeys()
-        content.addView(keys, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        keyboard = PcKeyboardView(this, object : PcKeyboardView.Listener {
+            override fun onKey(key: PcKey, mods: Set<Mod>, caps: Boolean) {
+                if (key.keysym != 0) vnc.pressWithMods(key.keysym, mods.map { it.keysym })
+            }
+            override fun onHide() = showKeys(false)
+        }, showSwitchKey = false)
+        keyboard.visibility = View.GONE
+        content.addView(keyboard, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(content, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
         statusText = TextView(this).apply {
@@ -400,97 +580,31 @@ class HomeActivity : Activity() {
         drawer.visibility = View.GONE
         root.addView(drawer, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
-        fab = buildFab()
-        root.addView(fab, FrameLayout.LayoutParams(dp(44), dp(44), Gravity.END or Gravity.CENTER_VERTICAL).apply {
-            rightMargin = dp(4)
-        })
-        vnc.onLatchedChanged = { updateLatches() }
-        setContentView(root)
-    }
-
-    private fun buildFab(): TextView = TextView(this).apply {
-        text = "▦"
-        textSize = 20f
-        gravity = Gravity.CENTER
-        setTextColor(Color.WHITE)
-        background = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(Color.argb(170, 29, 153, 243))
-        }
-        elevation = dp(6).toFloat()
-        contentDescription = "Android apps and options"
-        // Tap: menu. Drag: move it up or down out of KDE's way.
-        var startY = 0f
-        var startTranslation = 0f
-        var dragged = false
-        setOnTouchListener { v, e ->
-            when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { startY = e.rawY; startTranslation = v.translationY; dragged = false }
-                MotionEvent.ACTION_MOVE -> {
-                    val dy = e.rawY - startY
-                    if (abs(dy) > dp(8)) dragged = true
-                    if (dragged) {
-                        val limit = (root.height / 2f - dp(40)).coerceAtLeast(0f)
-                        v.translationY = (startTranslation + dy).coerceIn(-limit, limit)
-                    }
-                }
-                MotionEvent.ACTION_UP -> if (!dragged) v.performClick()
-            }
-            true
-        }
-        setOnClickListener { showMenu() }
-    }
-
-    private fun buildKeys(): HorizontalScrollView {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(Color.rgb(35, 38, 41))
-        }
-        fun key(label: String, action: () -> Unit): TextView = TextView(this).apply {
-            text = label
-            setTextColor(Color.WHITE)
-            textSize = 15f
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            minWidth = dp(46)
-            setPadding(dp(10), dp(10), dp(10), dp(10))
-            setOnClickListener { action() }
-            row.addView(this)
-        }
-        fun latch(label: String, sym: Int) {
-            latchButtons[sym] = key(label) {
-                if (!vnc.latched.remove(sym)) vnc.latched.add(sym)
-                updateLatches()
-            }
-        }
-        key("⌨") { vnc.showKeyboard() }
-        key("Esc") { vnc.tapKeysym(Keysyms.ESCAPE) }
-        key("Tab") { vnc.tapKeysym(Keysyms.TAB) }
-        latch("Ctrl", Keysyms.CTRL)
-        latch("Alt", Keysyms.ALT)
-        latch("Shift", Keysyms.SHIFT)
-        key("❖") { vnc.tapKeysym(Keysyms.SUPER) }   // opens the KDE launcher
-        key("←") { vnc.tapKeysym(Keysyms.LEFT) }
-        key("↑") { vnc.tapKeysym(Keysyms.UP) }
-        key("↓") { vnc.tapKeysym(Keysyms.DOWN) }
-        key("→") { vnc.tapKeysym(Keysyms.RIGHT) }
-        key("Home") { vnc.tapKeysym(Keysyms.HOME) }
-        key("End") { vnc.tapKeysym(Keysyms.END) }
-        key("PgUp") { vnc.tapKeysym(Keysyms.PAGE_UP) }
-        key("PgDn") { vnc.tapKeysym(Keysyms.PAGE_DOWN) }
-        key("Del") { vnc.tapKeysym(Keysyms.DELETE) }
-        for (i in 1..12) key("F$i") { vnc.tapKeysym(Keysyms.F1 + i - 1) }
-        key("✕") { showKeys(false) }
-        return HorizontalScrollView(this).apply {
-            addView(row)
+        scrim = View(this).apply {
+            setBackgroundColor(Color.argb(90, 0, 0, 0))
             visibility = View.GONE
+            setOnClickListener { showMenu(false) }
         }
-    }
+        root.addView(scrim, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        sideMenu = buildMenu()
+        sideMenu.visibility = View.GONE
+        root.addView(ScrollView(this).apply { addView(sideMenu) }.also { sv ->
+            sv.visibility = View.VISIBLE
+        }, FrameLayout.LayoutParams(dp(280), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END or Gravity.CENTER_VERTICAL))
 
-    private fun updateLatches() {
-        for ((sym, view) in latchButtons) {
-            view.setBackgroundColor(if (sym in vnc.latched) Color.rgb(29, 153, 243) else Color.TRANSPARENT)
+        // Gesture navigation would take the edges for Back; keep the middle of each edge for our swipes.
+        if (Build.VERSION.SDK_INT >= 29) {
+            root.addOnLayoutChangeListener { v, l, t, r, b, _, _, _, _ ->
+                val w = r - l
+                val cy = (b - t) / 2
+                val half = dp(100)
+                v.systemGestureExclusionRects = listOf(
+                    Rect(0, cy - half, dp(28), cy + half),
+                    Rect(w - dp(28), cy - half, w, cy + half),
+                )
+            }
         }
+        setContentView(root)
     }
 
     private fun buildSetup(): ScrollView {

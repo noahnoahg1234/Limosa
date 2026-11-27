@@ -285,10 +285,34 @@ class VncView(context: Context) : View(context) {
         }
     }
 
+    /** Modifier keysyms that are physically down (sent as their own key events). */
+    private val heldMods = HashSet<Int>()
+
+    /** Presses a key from the PC keyboard: [mods] down, key down/up, [mods] up. */
+    fun pressWithMods(sym: Int, mods: Collection<Int>) {
+        val c = client ?: return
+        for (m in mods) c.key(m, true)
+        c.key(sym, true)
+        c.key(sym, false)
+        for (m in mods.reversed()) c.key(m, false)
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         val c = client ?: return super.onKeyDown(keyCode, event)
         if (keyCode == KeyEvent.KEYCODE_BACK) return super.onKeyDown(keyCode, event)
         val sym = Keysyms.forKeyEvent(keyCode, event) ?: return super.onKeyDown(keyCode, event)
+        if (Keysyms.isModifier(sym)) heldMods += sym
+        // A keyboard app may only set the meta state (Ctrl+C as one event): press those modifiers too.
+        val implied = buildList {
+            if (event.isCtrlPressed && Keysyms.CTRL !in heldMods && 0xffe4 !in heldMods) add(Keysyms.CTRL)
+            if (event.isAltPressed && Keysyms.ALT !in heldMods && 0xffea !in heldMods) add(Keysyms.ALT)
+            if (event.isMetaPressed && Keysyms.SUPER !in heldMods) add(Keysyms.SUPER)
+        }
+        if (implied.isNotEmpty() && !Keysyms.isModifier(sym)) {
+            pressWithMods(sym, implied)
+            handledWithLatch += keyCode
+            return true
+        }
         if (latched.isNotEmpty() && !Keysyms.isModifier(sym)) {
             tapKeysym(sym)
             handledWithLatch += keyCode
@@ -303,6 +327,7 @@ class VncView(context: Context) : View(context) {
         if (keyCode == KeyEvent.KEYCODE_BACK) return super.onKeyUp(keyCode, event)
         if (handledWithLatch.remove(keyCode)) return true
         val sym = Keysyms.forKeyEvent(keyCode, event) ?: return super.onKeyUp(keyCode, event)
+        heldMods -= sym
         c.key(sym, false)
         return true
     }
