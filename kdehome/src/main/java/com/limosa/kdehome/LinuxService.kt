@@ -212,18 +212,24 @@ class LinuxService : Service() {
     @Volatile private var lastAutoRestart = 0L
 
     /** Brings an existing install up to date (new packages etc.) instead of asking for a reinstall. */
+    @Volatile private var upgrading = false
+
     private fun runUpgrades() {
         val marker = java.io.File(paths.base, "upgrade-level")
         val level = runCatching { marker.readText().trim().toInt() }.getOrDefault(1)
-        val script = SessionTuning.upgradeScript(level) ?: return
+        val script = SessionTuning.upgradeScript(level)
+            ?: if (SessionTuning.dpkgNeedsRepair(paths.rootfs)) "export DEBIAN_FRONTEND=noninteractive\n" + SessionTuning.REPAIR else return
         LinuxState.set(LinuxState.Phase.STARTING, "Updating Linux for this version of KDE Home…")
         updateNotification("Updating Linux")
+        upgrading = true
         try {
             val p = proot.process(script, asUser = false).start()
             p.inputStream.bufferedReader().forEachLine { LinuxState.log(it) }
             if (p.waitFor() == 0) marker.writeText(SessionTuning.UPGRADE_LEVEL.toString())
         } catch (e: Exception) {
             LinuxState.log("!!! Update step failed (${e.message}); it will be tried again next start")
+        } finally {
+            upgrading = false
         }
     }
 
@@ -366,20 +372,31 @@ class LinuxService : Service() {
         LinuxState.log(">>> Installing $list")
         val script = """
             |export DEBIAN_FRONTEND=noninteractive
-            |apt-get install -y $list || { apt-get update && apt-get install -y $list; }
+            |${SessionTuning.REPAIR}
+            |apt-get install -y $list || { echo '>>> Updating the package lists and trying again'; apt-get update && apt-get install -y $list; }
             |""".trimMargin()
         thread(name = "apt-install") {
+            // Internal storage/Linux/logs/apt.log, and the last apt error for the message.
+            val log = java.io.File(paths.base, "apt.log").apply { writeText("apt install $list  ${java.util.Date()}\n") }
+            var lastError = ""
             val ok = try {
                 if (LinuxFreezer.frozen) LinuxFreezer.thaw()
                 val p = proot.process(script, asUser = false).start()
-                p.inputStream.bufferedReader().forEachLine { LinuxState.log(it) }
+                p.inputStream.bufferedReader().forEachLine {
+                    LinuxState.log(it)
+                    log.appendText(it + "\n")
+                    if (it.startsWith("E:") || it.startsWith("dpkg: error")) lastError = it
+                }
                 p.waitFor() == 0
             } catch (e: Exception) {
                 LinuxState.log("!!! ${e.message}")
+                lastError = e.message.orEmpty()
                 false
             }
             aptBusy = false
-            val msg = if (ok) "Installed $list. It's in the KDE menu." else "Could not install $list (see the log)"
+            paths.publishLog(log)
+            val msg = if (ok) "Installed $list. It's in the KDE menu."
+                else "Could not install $list: ${lastError.ifEmpty { "see Internal storage/Linux/logs/apt.log" }}"
             LinuxState.log(">>> $msg")
             updateNotification(msg)
             main.post { android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show() }
@@ -399,7 +416,9 @@ class LinuxService : Service() {
         freezeTimer?.let { main.removeCallbacks(it) }
         val r = Runnable {
             freezeTimer = null
-            if (installer == null && session?.isAlive == true && LinuxState.phase == LinuxState.Phase.RUNNING) {
+            // Never pause in the middle of installing something: dpkg would be left half done.
+            if (installer == null && !aptBusy && !upgrading && session?.isAlive == true &&
+                LinuxState.phase == LinuxState.Phase.RUNNING) {
                 thread(name = "freeze") {
                     LinuxFreezer.freeze()
                     if (LinuxFreezer.frozen) updateNotification("Paused to save battery · opens again with KDE")

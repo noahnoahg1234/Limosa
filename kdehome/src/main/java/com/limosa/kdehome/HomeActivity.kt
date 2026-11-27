@@ -469,6 +469,7 @@ class HomeActivity : Activity() {
             runCatching { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) }
         }
         item("Install Linux apps…") { askAptInstall() }
+        item("Show Linux log") { showLog() }
         item("Linux terminal as root") {
             LinuxService.send(this, LinuxService.ACTION_ROOT_TERMINAL)
             Toast.makeText(this, "Opening a root Konsole on the KDE desktop: apt install works there", Toast.LENGTH_LONG).show()
@@ -478,6 +479,22 @@ class HomeActivity : Activity() {
         item("Choose default home app") { openHomeSettings() }
         item("Android settings") { startActivity(Intent(Settings.ACTION_SETTINGS)) }
         return col
+    }
+
+    private fun showLog() {
+        val text = TextView(this).apply {
+            text = LinuxState.logTail(150).ifEmpty { "(nothing logged yet)" }
+            typeface = Typeface.MONOSPACE
+            textSize = 10f
+            setTextIsSelectable(true)
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Linux log")
+            .setView(ScrollView(this).apply { addView(text); post { fullScroll(View.FOCUS_DOWN) } })
+            .setPositiveButton("Copy") { _, _ -> copyLog() }
+            .setNegativeButton("Close", null)
+            .show()
     }
 
     /** Installs Debian packages as root (Discover's fallback). */

@@ -26,6 +26,26 @@ object SessionTuning {
         "user-dirs-update-gtk", "org.freedesktop.problems.applet", "kup-daemon", "org.kde.korgac",
     )
 
+    /**
+     * Finishes package installs that were cut off (Android killed Linux, the phone turned off…).
+     * Until this runs, dpkg refuses every install, Discover's included.
+     */
+    val REPAIR = """
+        |if [ -n "${'$'}(dpkg --audit 2>/dev/null)" ] || ! apt-get check >/dev/null 2>&1; then
+        |  echo '>>> Repairing packages from an install that was cut off'
+        |  dpkg --configure -a --force-confdef --force-confold
+        |  apt-get -y -f install -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
+        |fi
+        |""".trimMargin()
+
+    /** Cheap check (no proot) for what [REPAIR] fixes. */
+    fun dpkgNeedsRepair(rootfs: File): Boolean {
+        if (File(rootfs, "var/lib/dpkg/updates").list()?.isNotEmpty() == true) return true
+        val status = runCatching { File(rootfs, "var/lib/dpkg/status").readText() }.getOrNull() ?: return false
+        return Regex("^Status: \\S+ \\S+ (half-installed|unpacked|half-configured|triggers-awaited|triggers-pending)$", RegexOption.MULTILINE)
+            .containsMatchIn(status)
+    }
+
     /** Runs as fake root before the desktop starts, only for steps newer than the install. */
     fun upgradeScript(fromLevel: Int): String? {
         val steps = mutableListOf<String>()
@@ -70,7 +90,7 @@ object SessionTuning {
                 |""".trimMargin()
         }
         if (steps.isEmpty()) return null
-        return "export DEBIAN_FRONTEND=noninteractive\n" + steps.joinToString("\n") + "\nexit 0\n"
+        return "export DEBIAN_FRONTEND=noninteractive\n" + REPAIR + "\n" + steps.joinToString("\n") + "\nexit 0\n"
     }
 
     /** Rewrites KDE settings that keep it fast. Runs before every start; keeps other settings. */
