@@ -38,6 +38,66 @@ Limosa runs QEMU virtual machines on an Android phone. It has two features to sa
 └───────────────────────────────────────────────────────┘
 ```
 
+## KDE Home: Debian + KDE Plasma as your Android home screen
+
+**[⬇ Download kdehome.apk](https://github.com/noahnoahg1234/Limosa/releases/latest/download/kdehome.apk)** (arm64 Android 8+)
+
+`kdehome/` is a second app in this repo. It is an Android **launcher** that installs Debian Linux with the
+**KDE Plasma** desktop and then shows KDE as your home screen. Your Android apps are shortcuts inside KDE.
+
+1. Install `kdehome.apk` and open **KDE Home**.
+2. Tap **Allow access to internal storage**. Linux gets the folder **Internal storage › Linux**
+   (`/storage/emulated/0/Linux`).
+3. Tap **Install Debian + KDE Plasma**. It downloads Debian (proot-distro's root filesystem, Debian 12 when
+   available) and then KDE Plasma with apt. That is about 1.5 GB of downloads and 4 GB on disk, and it takes
+   20–60 minutes. You can leave the app; the notification shows progress.
+4. Tap **Set as default home screen** and choose KDE Home. From then on, the Home button shows KDE.
+
+### Android apps in KDE
+
+- KDE's app menu gets an **Android** section with every app on the phone.
+- The KDE desktop has an **Android Apps** folder, and the phone, messages, camera, browser, Play Store and
+  Settings are placed on it directly. In the ▦ drawer, long-press an app and choose **Add to KDE desktop** to add more.
+- The ▦ button on the right edge opens the Android app drawer, the keyboard (with Esc, Tab, Ctrl, Alt, ❖, arrows
+  and F-keys), clipboard paste, the desktop size setting, Restart KDE and Stop Linux. Drag it up or down to move it.
+- Shortcuts update by themselves when you install or remove apps.
+- In a Linux terminal: `android-launch com.android.chrome`, `android-open https://kde.org`. Linux programs that
+  open links (`BROWSER`) open them on Android.
+
+Touch input: tap = click, long press = right-click, drag = drag, two-finger drag = scroll. A Bluetooth/USB mouse
+and keyboard work directly.
+
+### Where things are stored
+
+| Inside Linux | On Android | |
+|---|---|---|
+| `/home/user/Linux` | Internal storage › Linux | Shared folder, visible in the Files app |
+| `/sdcard` | Internal storage | All of internal storage |
+| `/` (the Debian system) | the app's private internal storage | |
+
+Internal storage › Linux also holds `installer/` (the downloaded Debian archive, reused if you reinstall) and
+`logs/` (`install.log`, `session.log`). The Debian system files can't go in that shared folder: Android's shared
+storage has no symlinks, Unix permissions or executable files, and Debian needs all three. So they sit in the
+app's own internal storage, which Android removes when you uninstall the app.
+
+### How it works
+
+```
+HomeActivity (HOME launcher) ── VncView ◄── RFB 127.0.0.1:5901 ── Xvnc :1 ◄── KDE Plasma (startplasma-x11)
+       │ ▦ drawer / keys                                              ▲
+LinuxService (foreground) ── proot (libproot.so) ── Debian rootfs ────┘
+       └─ AndroidBridge 127.0.0.1:7790 ◄── android-launch / .desktop shortcuts (token-protected)
+```
+
+- proot (from Termux's packages, bundled by `scripts/fetch_proot_termux.py`) runs Debian without root. The
+  installer runs as fake root, and the desktop runs as `user` (uid 1000), because KDE apps refuse to run as root.
+- KDE runs with no compositor, screen locker or file indexer, since none of them help on a phone.
+- **Android 12+** may kill Linux programs (the "phantom process" limit). If KDE keeps closing, turn on
+  *Developer options › Disable child process restrictions* (Android 14+), or run
+  `adb shell device_config put activity_manager max_phantom_processes 2147483647`.
+- Without a GPU in proot, KDE draws in software. It works, but expect it to be slower than a native launcher.
+  Use **Desktop size…** to trade sharpness for speed.
+
 ## Project layout
 
 | Path | What it is |
@@ -46,7 +106,9 @@ Limosa runs QEMU virtual machines on an Android phone. It has two features to sa
 | `app/` | The Android app: foreground service, idle signal receiver, WebView, file-picker ISO import |
 | `app/src/main/assets/web/` | The localhost dashboard and the VNC console (noVNC 1.7.0, MPL-2.0, vendored) |
 | `scripts/fetch_qemu_termux.py` | Bundles QEMU into the APK from Termux's Android packages |
-| `.github/workflows/android.yml` | CI: core tests, QEMU bundling, APK build |
+| `kdehome/` | KDE Home: the Debian + KDE Plasma home screen app (installer, proot, VNC view, Android shortcuts) |
+| `scripts/fetch_proot_termux.py` | Bundles proot into KDE Home from Termux's Android packages |
+| `.github/workflows/android.yml` | CI: core tests, QEMU and proot bundling, APK builds |
 
 ## Building
 
