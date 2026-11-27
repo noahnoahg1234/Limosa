@@ -40,7 +40,7 @@ Limosa runs QEMU virtual machines on an Android phone. It has two features to sa
 
 ## KDE Home: Debian + KDE Plasma as your Android home screen
 
-**[⬇ Download kdehome.apk](https://github.com/noahnoahg1234/Limosa/releases/latest/download/kdehome.apk)** (arm64 Android 8+)
+**[⬇ Download kdehome.apk](https://github.com/noahnoahg1234/Limosa/releases/download/kdehome-latest/kdehome.apk)** (arm64 Android 8+)
 
 `kdehome/` is a second app in this repo. It is an Android **launcher** that installs Debian Linux with the
 **KDE Plasma** desktop and then shows KDE as your home screen. Your Android apps are shortcuts inside KDE.

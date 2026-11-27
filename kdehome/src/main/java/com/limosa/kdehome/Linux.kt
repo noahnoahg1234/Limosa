@@ -175,7 +175,7 @@ class Proot(private val paths: LinuxPaths) {
         val fakes = mapOf(
             "loadavg" to "0.12 0.07 0.02 2/165 765\n",
             "uptime" to "7325.38 28490.12\n",
-            "version" to "Linux version ${System.getProperty("os.version") ?: "6.1.0"} (limosa@kdehome) #1 SMP PREEMPT\n",
+            "version" to "Linux version ${System.getProperty("os.version") ?: "6.1.0"} (user@kdehome) #1 SMP PREEMPT\n",
             "stat" to buildString {
                 append("cpu  1957 0 2877 93280 262 342 254 87 0 0\n")
                 for (i in 0 until cpus) append("cpu$i 245 0 360 11660 33 43 32 11 0 0\n")

@@ -79,12 +79,25 @@ jobs:
           name: Limosa build ${{ github.run_number }}
           target_commitish: ${{ github.sha }}
           make_latest: true
-          files: |
-            limosa.apk
-            kdehome.apk
+          files: limosa.apk
           body: |
-            Android APKs (arm64 phones):
-            - `limosa.apk`: the Limosa VM runner. QEMU bundled: ${{ steps.qemu.outcome == 'success' && 'yes (x86-64 and ARM64 guests)' || 'no - VMs cannot start in this build; storage and dashboard still work' }}.
-            - `kdehome.apk`: KDE Home, Debian + KDE Plasma as the Android home screen. proot bundled: ${{ steps.proot.outcome == 'success' && 'yes' || 'no - Linux cannot be installed with this build' }}.
-            Install: download the APK on your phone, open it and allow installing from this source.
+            Android APK for Limosa (arm64 phones).
+            QEMU bundled: ${{ steps.qemu.outcome == 'success' && 'yes (x86-64 and ARM64 guests)' || 'no - VMs cannot start in this build; storage and dashboard still work' }}.
+            Install: download `limosa.apk` on your phone, open it and allow installing from this source.
             Built from ${{ github.sha }}.
+
+      # KDE Home is its own app, so it gets its own release, updated in place on every build.
+      - name: Publish KDE Home release
+        if: github.event_name != 'pull_request' && steps.proot.outcome == 'success'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: kdehome-latest
+          name: KDE Home
+          make_latest: false
+          files: kdehome.apk
+          body: |
+            KDE Home: Debian Linux with the KDE Plasma desktop as your Android home screen (arm64 phones).
+            Your Android apps are shortcuts in KDE's menu, in the Android Apps folder on the KDE desktop, and behind the ▦ button.
+            Install: download `kdehome.apk` on your phone, open it and allow installing from this source.
+            Then open KDE Home, allow storage access and tap Install Debian + KDE Plasma.
+            Build ${{ github.run_number }}, from ${{ github.sha }}.
