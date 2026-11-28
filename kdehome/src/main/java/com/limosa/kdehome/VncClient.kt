@@ -16,7 +16,13 @@ import kotlin.concurrent.thread
  * Minimal RFB (VNC) client for the local KDE display: no authentication (the server only
  * listens on 127.0.0.1), 32-bit true colour, Raw + CopyRect + DesktopSize encodings.
  */
-class VncClient(private val host: String, private val port: Int, private val listener: Listener) {
+class VncClient(
+    private val host: String,
+    private val port: Int,
+    private val listener: Listener,
+    /** For Android's performance hints (API 31+): keeps the CPU fast enough for 60 frames a second. */
+    private val context: android.content.Context? = null,
+) {
 
     interface Listener {
         fun onConnected(width: Int, height: Int)
@@ -38,8 +44,14 @@ class VncClient(private val host: String, private val port: Int, private val lis
     @Volatile private var socket: Socket? = null
     @Volatile private var out: DataOutputStream? = null
     private val writer = Executors.newSingleThreadExecutor()
-    private var raw = ByteArray(0)
-    private var pixels = IntArray(0)
+    /**
+     * The framebuffer exactly as Android stores an ARGB_8888 bitmap in memory (R, G, B, X bytes).
+     * The server sends pixels in this order, so rectangles are read straight into it with no
+     * per-pixel work, and each frame is one memory copy into the bitmap.
+     */
+    private var fb = ByteArray(0)
+    private var fbBuffer: java.nio.ByteBuffer = java.nio.ByteBuffer.wrap(fb)
+    private var hint: Any? = null   // android.os.PerformanceHintManager.Session
 
     fun start() {
         thread(name = "vnc-reader", isDaemon = true) {
@@ -57,6 +69,7 @@ class VncClient(private val host: String, private val port: Int, private val lis
 
     fun close() {
         closed = true
+        if (android.os.Build.VERSION.SDK_INT >= 31) runCatching { (hint as? android.os.PerformanceHintManager.Session)?.close() }
         runCatching { socket?.close() }
         writer.shutdown()
     }
@@ -147,11 +160,12 @@ class VncClient(private val host: String, private val port: Int, private val lis
         resize(w, h)
 
         synchronized(o) {
-            // SetPixelFormat: 32 bpp, depth 24, little endian, true colour, BGRX in memory.
+            // SetPixelFormat: 32 bpp, depth 24, little endian, true colour, red in the lowest byte:
+            // R, G, B, X in memory, which is Android's own bitmap layout.
             o.writeByte(0); o.write(ByteArray(3))
             o.writeByte(32); o.writeByte(24); o.writeByte(0); o.writeByte(1)
             o.writeShort(255); o.writeShort(255); o.writeShort(255)
-            o.writeByte(16); o.writeByte(8); o.writeByte(0)
+            o.writeByte(0); o.writeByte(8); o.writeByte(16)
             o.write(ByteArray(3))
             // SetEncodings: CopyRect, Raw, DesktopSize.
             val encodings = intArrayOf(1, 0, -223)
@@ -163,12 +177,22 @@ class VncClient(private val host: String, private val port: Int, private val lis
         requestUpdate(o, incremental = false)
         listener.onConnected(w, h)
 
+        startHint()
         while (!closed) {
             when (val type = input.readUnsignedByte()) {
                 0 -> {
+                    val t0 = System.nanoTime()
                     framebufferUpdate(input)
+                    synchronized(lock) {
+                        val b = bitmap
+                        if (b != null && b.width == width && b.height == height) {
+                            fbBuffer.rewind()
+                            b.copyPixelsFromBuffer(fbBuffer)
+                        }
+                    }
+                    reportHint(System.nanoTime() - t0)
                     listener.onFramebufferUpdated()
-                    // At most ~30 frames a second: plenty for a desktop, and half the work of 60.
+                    // Up to 60 frames a second (one per 16 ms).
                     val wait = lastRequest + MIN_FRAME_MS - System.currentTimeMillis()
                     if (wait > 0) Thread.sleep(wait)
                     requestUpdate(o, incremental = true)
@@ -222,49 +246,61 @@ class VncClient(private val host: String, private val port: Int, private val lis
     }
 
     private fun rawRect(input: DataInputStream, x: Int, y: Int, w: Int, h: Int) {
-        val count = w * h
-        if (count == 0) return
-        val bytes = count * 4
-        if (raw.size < bytes) raw = ByteArray(bytes)
-        if (pixels.size < count) pixels = IntArray(count)
-        input.readFully(raw, 0, bytes)
-        val r = raw
-        val p = pixels
-        var j = 0
-        for (i in 0 until count) {
-            p[i] = -0x1000000 or
-                ((r[j + 2].toInt() and 0xFF) shl 16) or
-                ((r[j + 1].toInt() and 0xFF) shl 8) or
-                (r[j].toInt() and 0xFF)
-            j += 4
+        if (w == 0 || h == 0) return
+        val stride = width * 4
+        if (x + w > width || y + h > height) {
+            input.readFully(ByteArray(w * h * 4))   // out of bounds: skip it
+            return
         }
-        synchronized(lock) {
-            val b = bitmap ?: return
-            if (x + w <= b.width && y + h <= b.height) b.setPixels(p, 0, w, x, y, w, h)
+        // Each row goes straight into the framebuffer.
+        var off = y * stride + x * 4
+        val rowBytes = w * 4
+        for (row in 0 until h) {
+            input.readFully(fb, off, rowBytes)
+            off += stride
         }
     }
 
     private fun copyRect(sx: Int, sy: Int, x: Int, y: Int, w: Int, h: Int) {
         if (w == 0 || h == 0) return
-        synchronized(lock) {
-            val b = bitmap ?: return
-            if (sx + w > b.width || sy + h > b.height || x + w > b.width || y + h > b.height) return
-            val tmp = IntArray(w * h)
-            b.getPixels(tmp, 0, w, sx, sy, w, h)
-            b.setPixels(tmp, 0, w, x, y, w, h)
-        }
+        if (sx + w > width || sy + h > height || x + w > width || y + h > height) return
+        val stride = width * 4
+        val rowBytes = w * 4
+        // Moving down: copy the bottom row first so overlapping rows aren't overwritten too early.
+        val rows = if (y > sy) (h - 1 downTo 0) else (0 until h)
+        for (r in rows) System.arraycopy(fb, (sy + r) * stride + sx * 4, fb, (y + r) * stride + x * 4, rowBytes)
     }
 
     private fun resize(w: Int, h: Int) {
         synchronized(lock) {
             width = w
             height = h
-            bitmap = Bitmap.createBitmap(w.coerceAtLeast(1), h.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+            fb = ByteArray(w.coerceAtLeast(1) * h.coerceAtLeast(1) * 4)
+            fbBuffer = java.nio.ByteBuffer.wrap(fb)
+            bitmap = Bitmap.createBitmap(w.coerceAtLeast(1), h.coerceAtLeast(1), Bitmap.Config.ARGB_8888).apply {
+                // The 4th byte is padding from the server, not transparency.
+                setHasAlpha(false)
+            }
         }
     }
 
+    /** Tells Android this thread has 16 ms per frame, so it keeps the CPU fast enough. */
+    private fun startHint() {
+        if (android.os.Build.VERSION.SDK_INT < 31) return
+        hint = runCatching {
+            context?.getSystemService(android.os.PerformanceHintManager::class.java)
+                ?.createHintSession(intArrayOf(android.os.Process.myTid()), FRAME_NS)
+        }.getOrNull()
+    }
+
+    private fun reportHint(ns: Long) {
+        if (android.os.Build.VERSION.SDK_INT < 31) return
+        runCatching { (hint as? android.os.PerformanceHintManager.Session)?.reportActualWorkDuration(ns.coerceAtLeast(1)) }
+    }
+
     private companion object {
-        const val MIN_FRAME_MS = 33L
+        const val MIN_FRAME_MS = 16L
+        const val FRAME_NS = 16_666_667L
     }
 
     private fun reason(input: DataInputStream): String {

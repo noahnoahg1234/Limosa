@@ -365,7 +365,7 @@ class LinuxService : Service() {
         |chmod 700 "${'$'}XDG_RUNTIME_DIR"; chmod 1777 /tmp/.X11-unix
         |rm -f /tmp/.X1-lock /tmp/.X11-unix/X1
         |echo ">>> Starting Xvnc ${w}x$h"
-        |Xvnc :1 -geometry ${w}x$h -depth 24 -dpi 96 -localhost -rfbport $VNC_PORT -FrameRate ${if (resourceSaving()) 30 else 60} \
+        |Xvnc :1 -geometry ${w}x$h -depth 24 -dpi 96 -localhost -rfbport $VNC_PORT -FrameRate 60 \
         |  -SecurityTypes None -AlwaysShared -ac -nolisten tcp &
         |XPID=${'$'}!
         |trap 'kill ${'$'}XPID 2>/dev/null' EXIT

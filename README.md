@@ -99,7 +99,7 @@ LinuxService (foreground) ── proot (libproot.so) ── Debian rootfs ──
   Internal storage › Linux › logs › `services.log`.
 - **Resource saving** (on by default, in the menu): when KDE isn't on screen (screen off, or another app open), every
   Linux program is paused after 20 seconds and uses no CPU, then continues as soon as you're back. The display
-  is limited to 30 frames a second. Turn it off if something in Linux should keep running in the background.
+  runs at 60 frames a second. Turn it off if something in Linux should keep running in the background.
 - To stay light, KDE runs without animations, splash screen, session restore and the background services that do
   nothing on a phone (Discover notifier, accessibility, PipeWire, power management…). If Android kills the session
   anyway, KDE Home restarts it once by itself.

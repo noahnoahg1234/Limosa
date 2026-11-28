@@ -88,6 +88,7 @@ class HomeActivity : Activity() {
         }
         buildUi()
         registerBack()
+        preferSixtyHz()
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2)
         }
@@ -135,6 +136,23 @@ class HomeActivity : Activity() {
 
     @Deprecated("Android 13+ uses the back callbacks registered in registerBack()")
     override fun onBackPressed() = handleBack(0)
+
+    /**
+     * Asks for a 60 Hz (or faster) display mode at the current resolution, so the screen doesn't
+     * drop to a lower refresh rate while KDE is showing.
+     */
+    private fun preferSixtyHz() {
+        @Suppress("DEPRECATION")
+        val display = if (Build.VERSION.SDK_INT >= 30) display else windowManager.defaultDisplay
+        val current = display?.mode ?: return
+        val modes = display.supportedModes.filter {
+            it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight
+        }
+        val best = modes.filter { it.refreshRate in 59f..61f }.maxByOrNull { it.refreshRate }
+            ?: modes.filter { it.refreshRate >= 59f }.minByOrNull { it.refreshRate }
+            ?: return
+        window.attributes = window.attributes.apply { preferredDisplayModeId = best.modeId }
+    }
 
     // ---- Gestures ----------------------------------------------------------------------------
 
@@ -332,7 +350,7 @@ class HomeActivity : Activity() {
 
     private fun connect() {
         if (client != null) return
-        val c = VncClient("127.0.0.1", LinuxService.VNC_PORT, object : VncClient.Listener {
+        val c = VncClient("127.0.0.1", LinuxService.VNC_PORT, context = this, listener = object : VncClient.Listener {
             override fun onConnected(width: Int, height: Int) = runOnUiThread {
                 render()
                 if (!prefs.getBoolean("swipeHintShown", false)) {
@@ -463,7 +481,7 @@ class HomeActivity : Activity() {
             prefs.edit().putBoolean(LinuxService.PREF_RESOURCE_SAVING, on).apply()
             Toast.makeText(
                 this,
-                if (on) "Resource saving on: Linux pauses when KDE isn't on screen (restart KDE for the 30 fps limit)"
+                if (on) "Resource saving on: Linux pauses when KDE isn't on screen"
                 else "Resource saving off: Linux keeps running in the background",
                 Toast.LENGTH_LONG,
             ).show()
