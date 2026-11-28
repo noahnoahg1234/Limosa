@@ -7,3 +7,4 @@ local.properties
 captures/
 *.apk
 app/src/main/jniLibs/**/*.so
+kdehome/src/main/jniLibs/**/*.so
