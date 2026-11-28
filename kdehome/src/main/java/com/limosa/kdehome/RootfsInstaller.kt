@@ -34,6 +34,8 @@ class RootfsInstaller(
         val rootfsUrl: String = "",
         val extraPackages: String = DEFAULT_EXTRAS,
         val withRecommends: Boolean = false,
+        /** A backup made by KDE Home (Internal storage/Linux/debian-backup.tar.gz): restore it instead of installing. */
+        val restoreFrom: String = "",
     )
 
     @Volatile var cancelled = false
@@ -43,7 +45,13 @@ class RootfsInstaller(
             throw IOException("This APK was built without proot, so Linux can't run. Build it with scripts/fetch_proot_termux.py (CI does this).")
         }
         paths.base.mkdirs()
-        if (!paths.extractedMarker.exists() || !File(paths.rootfs, "usr/bin/apt-get").exists()) {
+        if (opts.restoreFrom.isNotEmpty()) {
+            val backup = File(opts.restoreFrom)
+            if (!backup.isFile) throw IOException("No backup at ${backup.absolutePath}")
+            log("Restoring Debian from ${backup.absolutePath}")
+            extract(backup)
+            paths.extractedMarker.writeText("restored from ${backup.absolutePath}")
+        } else if (!paths.extractedMarker.exists() || !File(paths.rootfs, "usr/bin/apt-get").exists()) {
             val url = opts.rootfsUrl.trim().ifEmpty { findRootfsUrl() }
             val archive = download(url)
             extract(archive)
@@ -52,7 +60,8 @@ class RootfsInstaller(
             log("Debian is already unpacked, continuing with the packages.")
         }
         configureRootfs()
-        runApt(opts)
+        // A restored backup already has KDE: no need to download it again.
+        if (opts.restoreFrom.isEmpty() || !File(paths.rootfs, "usr/bin/startplasma-x11").exists()) runApt(opts)
         configureUser()
         File(paths.base, "last-system-update").writeText(System.currentTimeMillis().toString())
         paths.installedMarker.writeText(System.currentTimeMillis().toString())
@@ -273,6 +282,7 @@ class RootfsInstaller(
         // There is no init system: don't let packages try to start services.
         write("usr/sbin/policy-rc.d", "#!/bin/sh\nexit 101\n", 493 /* 0755 */)
         File(r, "tmp").mkdirs()
+        for (d in listOf("dev", "proc", "sys", "run", "sdcard")) File(r, d).mkdirs()   // not in backups
         Os.chmod(File(r, "tmp").absolutePath, 1023 /* 01777 */)
         writeBridge(r)
     }
@@ -386,6 +396,9 @@ class RootfsInstaller(
 
     companion object {
         const val PREFERRED_CODENAME = "bookworm"
+
+        /** Where Back up Debian puts the whole system. */
+        fun backupFile(paths: LinuxPaths) = File(paths.linuxFolder, "debian-backup.tar.gz")
 
         /** Must exist in every Debian release that ships KDE Plasma. */
         const val CORE_PACKAGES = "kde-plasma-desktop plasma-workspace kwin-x11 konsole dolphin " +

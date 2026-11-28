@@ -67,8 +67,11 @@ class LinuxService : Service() {
                     rootfsUrl = intent.getStringExtra(EXTRA_URL).orEmpty(),
                     extraPackages = intent.getStringExtra(EXTRA_PACKAGES) ?: RootfsInstaller.DEFAULT_EXTRAS,
                     withRecommends = intent.getBooleanExtra(EXTRA_RECOMMENDS, false),
+                    restoreFrom = intent.getStringExtra(EXTRA_RESTORE).orEmpty(),
                 )
             )
+            ACTION_BACKUP -> backup()
+            ACTION_RESTORE -> restore()
             ACTION_START -> startSession(intent.getIntExtra(EXTRA_WIDTH, 1280), intent.getIntExtra(EXTRA_HEIGHT, 720))
             ACTION_STOP -> {
                 stopSession()
@@ -375,6 +378,53 @@ class LinuxService : Service() {
         |exit ${'$'}code
         |""".trimMargin()
 
+    // ---- Backup -------------------------------------------------------------------------------
+
+    /** The whole Debian system as one file in Internal storage/Linux (KDE keeps running). */
+    private fun backup() {
+        if (!paths.hasStorageAccess() || !paths.isInstalled) return
+        val name = RootfsInstaller.backupFile(paths).name
+        runApt(
+            "Backing up Debian to Internal storage/Linux/$name…",
+            """
+            |OUT=/sdcard/Linux/$name
+            |mkdir -p /sdcard/Linux
+            |cd / || exit 1
+            |tar --numeric-owner --one-file-system -czf "DDOUT.part" \
+            |  --exclude=./proc --exclude=./sys --exclude=./dev --exclude=./run --exclude=./tmp --exclude=./sdcard \
+            |  --exclude=./home/user/Linux --exclude=./home/user/.cache --exclude=./var/cache/apt/archives \
+            |  --exclude=./var/tmp --warning=no-file-changed --warning=no-file-removed --warning=no-file-ignored \
+            |  --checkpoint=20000 --checkpoint-action='echo=>>> Backing up Debian… (%u)' .
+            |rc=DD?
+            |# 1 = some files changed while copying (KDE was running): the backup is still good.
+            |if [ DDrc -le 1 ]; then
+            |  mv -f "DDOUT.part" "DDOUT"
+            |  echo ">>> Backup saved: Internal storage/Linux/$name (DD(du -h "DDOUT" | cut -f1))"
+            |else
+            |  rm -f "DDOUT.part"
+            |  echo "E: tar failed with exit code DDrc"
+            |  exit 1
+            |fi
+            |""".trimMargin().replace("DD", "$"),
+            "Debian is backed up to Internal storage/Linux/$name",
+            "Backup failed",
+        )
+    }
+
+    /** Replaces Debian with the backup (stops KDE; no download needed). */
+    private fun restore() {
+        val backup = RootfsInstaller.backupFile(paths)
+        if (!backup.isFile || installer != null || aptBusy || switching) return
+        if (RootMode.enabled(this)) {
+            LinuxState.log("!!! Restore works in proot mode; switch root mode off first")
+            return
+        }
+        stopSession()
+        paths.installedMarker.delete()
+        paths.extractedMarker.delete()
+        main.postDelayed({ install(RootfsInstaller.Options(restoreFrom = backup.absolutePath)) }, 2500)
+    }
+
     // ---- Root mode ---------------------------------------------------------------------------
 
     @Volatile private var switching = false
@@ -458,7 +508,8 @@ class LinuxService : Service() {
     ) { java.io.File(paths.base, "last-system-update").writeText(System.currentTimeMillis().toString()) }
 
     /** Shows apt's progress in the notification ("Setting up …"). */
-    private fun showAptProgress(line: String) {
+    private fun showAptProgress(raw: String) {
+        val line = raw.removePrefix("tar: ")   // tar prints its progress lines with this prefix
         val text = when {
             line.startsWith(">>> ") -> line.removePrefix(">>> ")
             line.startsWith("Unpacking ") -> "Updating: " + line.removePrefix("Unpacking ").substringBefore(' ')
@@ -581,6 +632,9 @@ class LinuxService : Service() {
         const val ACTION_APT_INSTALL = "com.limosa.kdehome.APT_INSTALL"
         const val ACTION_SYSTEM_UPDATE = "com.limosa.kdehome.SYSTEM_UPDATE"
         const val ACTION_ROOT_ON = "com.limosa.kdehome.ROOT_ON"
+        const val ACTION_BACKUP = "com.limosa.kdehome.BACKUP"
+        const val ACTION_RESTORE = "com.limosa.kdehome.RESTORE"
+        const val EXTRA_RESTORE = "restore"
         const val ACTION_ROOT_OFF = "com.limosa.kdehome.ROOT_OFF"
         const val ACTION_DELETE_PROOT_COPY = "com.limosa.kdehome.DELETE_PROOT_COPY"
         const val ACTION_HIDDEN = "com.limosa.kdehome.HIDDEN"

@@ -52,6 +52,13 @@ Internal storage › Linux also holds `installer/` (the downloaded Debian archiv
 storage has no symlinks, Unix permissions or executable files, and Debian needs all three. So they sit in the
 app's own internal storage, which Android removes when you uninstall the app.
 
+## Backing up Debian to the Linux folder
+
+Menu › **Back up Debian to the Linux folder** saves the whole Debian system (KDE, your apps, settings and files)
+as one file: **Internal storage › Linux › debian-backup.tar.gz**. KDE keeps running meanwhile. It survives
+uninstalling KDE Home and can be copied to another phone: on a fresh install the setup screen offers
+**Restore Debian from the backup** (no download), and menu › **Restore Debian from backup…** puts an older state back.
+
 ## Root mode (no proot)
 
 On a **rooted** phone (Magisk), menu › **Root mode (no proot)…** moves Debian into one image file,

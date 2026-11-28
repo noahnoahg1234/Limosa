@@ -67,6 +67,7 @@ class HomeActivity : Activity() {
     private lateinit var setupProgress: ProgressBar
     private lateinit var storageButton: Button
     private lateinit var installButton: Button
+    private lateinit var restoreButton: Button
     private lateinit var urlField: EditText
     private lateinit var packagesField: EditText
     private lateinit var recommends: CheckBox
@@ -278,6 +279,9 @@ class HomeActivity : Activity() {
         val installing = phase == LinuxState.Phase.INSTALLING
         val storage = paths.hasStorageAccess()
         storageButton.visibility = if (storage) View.GONE else View.VISIBLE
+        val backup = RootfsInstaller.backupFile(paths)
+        restoreButton.visibility = if (storage && backup.isFile && !installing) View.VISIBLE else View.GONE
+        restoreButton.text = "Restore Debian from the backup (${backup.length() shr 20} MB, no download)"
         installButton.isEnabled = !installing && paths.hasProot
         installButton.text = if (phase == LinuxState.Phase.ERROR) "Retry install" else "Install Debian + KDE Plasma"
         setupStatus.text = when {
@@ -469,6 +473,28 @@ class HomeActivity : Activity() {
             runCatching { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) }
         }
         item("Install Linux apps…") { askAptInstall() }
+        item("Back up Debian to the Linux folder") {
+            if (!paths.hasStorageAccess()) {
+                Toast.makeText(this, "Allow storage access first", Toast.LENGTH_LONG).show()
+                requestStorage()
+            } else {
+                LinuxService.send(this, LinuxService.ACTION_BACKUP)
+                Toast.makeText(this, "Backing up all of Debian to Internal storage › Linux › debian-backup.tar.gz. The notification says when it's done.", Toast.LENGTH_LONG).show()
+            }
+        }
+        item("Restore Debian from backup…") {
+            val f = RootfsInstaller.backupFile(paths)
+            if (!f.isFile) {
+                Toast.makeText(this, "No backup yet in Internal storage › Linux", Toast.LENGTH_LONG).show()
+            } else {
+                AlertDialog.Builder(this)
+                    .setTitle("Restore Debian?")
+                    .setMessage("Replaces Debian with the backup from ${java.text.DateFormat.getDateTimeInstance().format(java.util.Date(f.lastModified()))} (${f.length() shr 20} MB). Anything changed since then is lost. KDE restarts afterwards.")
+                    .setPositiveButton("Restore") { _, _ -> autoStarted = false; LinuxService.send(this, LinuxService.ACTION_RESTORE) }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+        }
         item("Update Linux") {
             LinuxService.send(this, LinuxService.ACTION_SYSTEM_UPDATE)
             Toast.makeText(this, "Updating all of Debian; the notification shows progress. KDE keeps running.", Toast.LENGTH_LONG).show()
@@ -746,6 +772,12 @@ class HomeActivity : Activity() {
             col.addView(this)
         }
         installButton = button("Install Debian + KDE Plasma") { install() }
+        restoreButton = button("Restore Debian from the backup") {
+            LinuxService.send(this, LinuxService.ACTION_INSTALL) {
+                it.putExtra(LinuxService.EXTRA_RESTORE, RootfsInstaller.backupFile(paths).absolutePath)
+            }
+            autoStarted = false
+        }
         button("Set as default home screen") { openHomeSettings() }
         setupProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
