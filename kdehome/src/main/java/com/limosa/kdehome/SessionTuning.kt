@@ -14,7 +14,7 @@ import java.io.File
 object SessionTuning {
 
     /** Bump when [upgradeScript] gets a new step. Existing installs run the new steps once. */
-    const val UPGRADE_LEVEL = 5
+    const val UPGRADE_LEVEL = 6
 
     /** Background services hidden from KDE's autostart (no-ops or error spam inside proot). */
     private val DISABLED_AUTOSTART = listOf(
@@ -58,6 +58,18 @@ object SessionTuning {
         |apt-get -y --with-new-pkgs -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade
         |apt-get clean
         |echo '>>> Debian is up to date'
+        |""".trimMargin()
+
+    /** Makes the desktop user an administrator: sudo group, sudoers, and fakeroot for [writeAdminTools]. */
+    val MAKE_ADMIN = """
+        |for p in fakeroot sudo; do
+        |  dpkg -s "${'$'}p" >/dev/null 2>&1 || apt-get install -y --no-remove --no-install-recommends "${'$'}p" || true
+        |done
+        |getent group sudo >/dev/null || groupadd sudo
+        |usermod -aG sudo user 2>/dev/null || true
+        |mkdir -p /etc/sudoers.d
+        |echo 'user ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/kdehome-user
+        |chmod 440 /etc/sudoers.d/kdehome-user
         |""".trimMargin()
 
     /** How often Linux updates itself when KDE starts. */
@@ -109,6 +121,9 @@ object SessionTuning {
                 |appstreamcli refresh-cache --force >/dev/null 2>&1 || true
                 |""".trimMargin()
         }
+        if (fromLevel < 6) {
+            steps += "echo '>>> Making the main user an administrator (sudo)'\n" + MAKE_ADMIN
+        }
         if (fromLevel < 5) {
             // Put back KDE's apps if an earlier repair or install removed any.
             steps += """
@@ -159,6 +174,7 @@ object SessionTuning {
         pinApps(rootfs, home)
         writeSystemConfig(rootfs)
         writeSound(rootfs, home)
+        writeAdminTools(rootfs)
         writeSessionScript(rootfs)
     }
 
@@ -301,6 +317,78 @@ object SessionTuning {
             File(home, ".config/pulse/client.conf"),
             "# Written by KDE Home: use the server it starts.\nautospawn = no\ndefault-server = unix:/tmp/runtime-user/pulse/native\n",
         )
+    }
+
+    /**
+     * sudo, pkexec and su for the main user. The real ones need setuid, which proot can't provide
+     * (that is why sudo always failed). These run the command as root with fakeroot instead, which
+     * is all root means here: every Linux file already belongs to this app's Android user.
+     */
+    private fun writeAdminTools(rootfs: File) {
+        val bin = File(rootfs, "usr/local/bin").apply { mkdirs() }
+        fun tool(name: String, text: String) {
+            val f = File(bin, name)
+            writeIfChanged(f, text)
+            Os.chmod(f.absolutePath, 493)
+        }
+        tool("sudo", """
+            |#!/bin/bash
+            |# KDE Home's sudo: runs the command as root with fakeroot (real sudo needs setuid, which
+            |# proot can't do). The main user is the phone's only user, so there is no password.
+            |FR=${'$'}(command -v fakeroot-tcp || command -v fakeroot) || {
+            |  echo "sudo: fakeroot is missing; KDE Home installs it when KDE starts (or menu › Install Linux apps: fakeroot)" >&2
+            |  exit 1
+            |}
+            |[ "${'$'}(id -u)" = 0 ] && exec "${'$'}@"   # already root
+            |login=0; shell=0
+            |while [ ${'$'}# -gt 0 ]; do
+            |  case "${'$'}1" in
+            |    -i|--login) login=1; shift ;;
+            |    -s|--shell) shell=1; shift ;;
+            |    -u|--user)
+            |      case "${'$'}2" in root|0|'#0') ;; *) echo "sudo: only root is available here" >&2; exit 1 ;; esac
+            |      shift 2 ;;
+            |    -u*) shift ;;
+            |    -v|--validate|-k|--reset-timestamp|-K|--remove-timestamp) exit 0 ;;
+            |    -l|--list) echo "User ${'$'}USER may run the following commands: (ALL : ALL) NOPASSWD: ALL"; exit 0 ;;
+            |    -V|--version) echo "sudo (KDE Home, via fakeroot)"; exit 0 ;;
+            |    -h|--help) echo "usage: sudo [-i | -s] [command [args...]]"; exit 0 ;;
+            |    --) shift; break ;;
+            |    -*) shift ;;   # -E, -H, -n, -S, -A, -b, --preserve-env…: nothing to do here
+            |    *) break ;;
+            |  esac
+            |done
+            |export SUDO_USER="${'$'}USER" SUDO_UID="${'$'}(id -u)" SUDO_GID="${'$'}(id -g)" SUDO_COMMAND="${'$'}*"
+            |if [ ${'$'}login = 1 ]; then
+            |  export HOME=/root USER=root LOGNAME=root
+            |  cd /root 2>/dev/null
+            |  [ ${'$'}# -eq 0 ] && exec "${'$'}FR" -- bash -l
+            |  exec "${'$'}FR" -- bash -lc "${'$'}*"
+            |fi
+            |if [ ${'$'}# -eq 0 ]; then
+            |  [ ${'$'}shell = 1 ] && exec "${'$'}FR" -- "${'$'}{SHELL:-/bin/bash}"
+            |  echo "usage: sudo [-i | -s] [command [args...]]" >&2
+            |  exit 1
+            |fi
+            |[ ${'$'}shell = 1 ] && exec "${'$'}FR" -- "${'$'}{SHELL:-/bin/bash}" -c "${'$'}*"
+            |exec "${'$'}FR" -- "${'$'}@"
+            |""".trimMargin() + "\n")
+        tool("pkexec", """
+            |#!/bin/bash
+            |# KDE Home: pkexec runs the program as root through KDE Home's sudo.
+            |while [ ${'$'}# -gt 0 ]; do
+            |  case "${'$'}1" in --user) shift 2 ;; --disable-internal-agent|--keep-cwd) shift ;; --version) echo "pkexec (KDE Home)"; exit 0 ;; *) break ;; esac
+            |done
+            |exec /usr/local/bin/sudo -- "${'$'}@"
+            |""".trimMargin() + "\n")
+        tool("su", """
+            |#!/bin/bash
+            |# KDE Home: "su" and "su -" open a root shell through KDE Home's sudo; anything else is the real su.
+            |case "${'$'}*" in
+            |  ""|"-"|"-l"|"--login"|"root"|"- root"|"-l root") exec /usr/local/bin/sudo -i ;;
+            |esac
+            |exec /bin/su "${'$'}@"
+            |""".trimMargin() + "\n")
     }
 
     private fun writeIfChanged(f: File, text: String) {

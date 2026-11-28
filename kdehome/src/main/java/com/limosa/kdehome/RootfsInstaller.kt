@@ -330,6 +330,7 @@ class RootfsInstaller(
             |if ! id user >/dev/null 2>&1; then
             |  useradd -m -o -u 1000 -s /bin/bash -c 'KDE Home user' user
             |fi
+            |${SessionTuning.MAKE_ADMIN}
             |mkdir -p /home/user/Linux /home/user/Desktop /home/user/AndroidApps
             |echo '>>> Updating everything to the newest versions'
             |apt-get -y --with-new-pkgs -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade || true
@@ -394,7 +395,7 @@ class RootfsInstaller(
         /** Installed one by one, so a missing name doesn't stop the install. */
         const val DEFAULT_EXTRAS = "systemsettings kate ark gwenview okular kde-spectacle plasma-systemmonitor " +
             "kinfocenter khelpcenter plasma-widgets-addons fonts-noto-core fonts-noto-color-emoji " +
-            "tigervnc-tools kglobalacceld locales sudo nano firefox-esr plasma-discover packagekit polkitd appstream dbus-daemon " +
+            "tigervnc-tools kglobalacceld locales sudo fakeroot nano firefox-esr plasma-discover packagekit polkitd appstream dbus-daemon " +
             "pulseaudio pulseaudio-utils plasma-pa"
 
         private val ROOTFS_TOP_LEVEL = setOf(

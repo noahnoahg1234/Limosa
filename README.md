@@ -64,6 +64,9 @@ LinuxService (foreground) ── proot (libproot.so) ── Debian rootfs ──
 - proot (from Termux's packages, bundled by `scripts/fetch_proot_termux.py`) runs Debian without root. The
   installer runs as fake root, and the desktop runs as `user` (uid 1000), because KDE apps refuse to run as root.
 - KDE runs with no compositor, screen locker or file indexer, since none of them help on a phone.
+- **The main user is an administrator**: `sudo apt install …`, `sudo -i`, `su -` and `pkexec` work in Konsole,
+  with no password. Real sudo needs setuid, which proot can't provide, so KDE Home's `sudo` runs commands as root
+  with fakeroot (every Linux file belongs to the app's Android user anyway). The user is in the `sudo` group.
 - **Sound**: PulseAudio runs inside Linux and plays into a virtual "Android" output, which KDE Home streams
   to the phone's speaker or headphones. Use KDE's volume control or the phone's volume buttons.
 - **Discover** (KDE's app store) works through PackageKit: KDE Home starts the system D-Bus, polkit (with no
