@@ -143,7 +143,8 @@ object SessionTuning {
     }
 
     /** Rewrites KDE settings that keep it fast. Runs before every start; keeps other settings. */
-    fun apply(rootfs: File, home: File) {
+    /** [realRoot]: root mode (chroot), where the real sudo works and no wrappers are wanted. */
+    fun apply(rootfs: File, home: File, realRoot: Boolean = false) {
         val cfg = File(home, ".config").apply { mkdirs() }
         // No animations: the biggest speed-up when everything is drawn in software.
         setIni(File(cfg, "kdeglobals"), "KDE", "AnimationDurationFactor", "0")
@@ -174,7 +175,11 @@ object SessionTuning {
         pinApps(rootfs, home)
         writeSystemConfig(rootfs)
         writeSound(rootfs, home)
-        writeAdminTools(rootfs)
+        if (realRoot) {
+            for (n in listOf("sudo", "pkexec", "su")) File(rootfs, "usr/local/bin/$n").delete()
+        } else {
+            writeAdminTools(rootfs)
+        }
         writeSessionScript(rootfs)
     }
 

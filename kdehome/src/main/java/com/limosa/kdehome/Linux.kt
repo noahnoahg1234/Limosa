@@ -150,6 +150,14 @@ class Proot(private val paths: LinuxPaths) {
         return pb
     }
 
+    /**
+     * Starts [script] in Debian: under proot, or with chroot and real root in [RootMode].
+     * Use this rather than [process], which is proot only.
+     */
+    fun start(script: String, asUser: Boolean, noSeccomp: Boolean = false): Process =
+        if (RootMode.enabled(paths.context)) RootMode.start(paths, script, asUser)
+        else process(script, asUser, noSeccomp).start()
+
     private fun binds(): List<String> {
         val b = mutableListOf(
             "/dev",

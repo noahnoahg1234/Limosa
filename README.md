@@ -52,6 +52,22 @@ Internal storage › Linux also holds `installer/` (the downloaded Debian archiv
 storage has no symlinks, Unix permissions or executable files, and Debian needs all three. So they sit in the
 app's own internal storage, which Android removes when you uninstall the app.
 
+## Root mode (no proot)
+
+On a **rooted** phone (Magisk), menu › **Root mode (no proot)…** moves Debian into one image file,
+**Internal storage › Linux › debian.img** (its current size plus 8 GB of room; the file only uses space as it fills),
+and runs it with `chroot` and real root instead of proot:
+
+- faster (no system-call tracing), and the real `sudo` works;
+- Linux programs are started through `su`, outside the app, so Android's process limit doesn't kill them;
+- KDE Home's shortcuts, settings, sound, keyboard and app drawer work the same: the image is mounted where proot
+  mode keeps Debian, labelled as the app's own data, and the desktop user has the app's Android user ID.
+
+The proot copy is kept until you delete it (same menu), so you can switch back. In Magisk's settings, Mount Namespace
+Mode must be **Inherit** (the default) so the app can see the mounted image. Without root, Debian has to stay in the
+app's private storage under proot: Android doesn't let apps run programs from shared storage, and shared storage can't
+hold Linux permissions or symlinks.
+
 ## How it works
 
 ```

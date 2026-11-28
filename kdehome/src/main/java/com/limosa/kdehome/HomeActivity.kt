@@ -478,6 +478,7 @@ class HomeActivity : Activity() {
             LinuxService.send(this, LinuxService.ACTION_ROOT_TERMINAL)
             Toast.makeText(this, "Opening a root Konsole on the KDE desktop: apt install works there", Toast.LENGTH_LONG).show()
         }
+        item("Root mode (no proot)…") { rootModeDialog() }
         item("Restart KDE") { restartKde() }
         item("Stop Linux") { stopLinux() }
         item("Choose default home app") { openHomeSettings() }
@@ -499,6 +500,44 @@ class HomeActivity : Activity() {
             .setPositiveButton("Copy") { _, _ -> copyLog() }
             .setNegativeButton("Close", null)
             .show()
+    }
+
+    private fun rootModeDialog() {
+        val on = RootMode.enabled(this)
+        val copy = RootMode.protCopy(paths).isDirectory
+        val b = AlertDialog.Builder(this).setTitle("Root mode")
+        if (!on) {
+            b.setMessage(
+                "Runs Debian without proot, with chroot and real root. Needs a rooted phone (Magisk).\n\n" +
+                    "Debian is copied into one image file, Internal storage › Linux › debian.img " +
+                    "(its size now plus 8 GB of room, which only uses space as it fills). The proot copy is kept " +
+                    "until you delete it. KDE is faster, sudo is the real sudo, and Android doesn't kill Linux " +
+                    "for having too many processes.\n\nMagisk will ask to allow KDE Home. Copying takes a few minutes."
+            )
+            b.setPositiveButton("Switch to root mode") { _, _ -> LinuxService.send(this, LinuxService.ACTION_ROOT_ON) }
+        } else {
+            b.setMessage(
+                "Debian runs from Internal storage › Linux › debian.img with chroot." +
+                    if (copy) "\n\nThe old proot copy is still in the app's storage." else ""
+            )
+            if (copy) {
+                b.setPositiveButton("Use proot again") { _, _ ->
+                    AlertDialog.Builder(this)
+                        .setMessage("Proot mode uses the old copy from before the switch. Changes made in root mode stay in debian.img only.")
+                        .setPositiveButton("Use proot") { _, _ -> LinuxService.send(this, LinuxService.ACTION_ROOT_OFF) }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                }
+                b.setNeutralButton("Delete proot copy") { _, _ ->
+                    AlertDialog.Builder(this)
+                        .setMessage("Delete the old proot copy of Debian to free space? Root mode keeps working; going back to proot then needs a reinstall.")
+                        .setPositiveButton("Delete") { _, _ -> LinuxService.send(this, LinuxService.ACTION_DELETE_PROOT_COPY) }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                }
+            }
+        }
+        b.setNegativeButton("Close", null).show()
     }
 
     /** Installs Debian packages as root (Discover's fallback). */

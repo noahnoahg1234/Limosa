@@ -88,6 +88,13 @@ class LinuxService : Service() {
             ACTION_ROOT_TERMINAL -> rootTerminal()
             ACTION_APT_INSTALL -> aptInstall(intent.getStringExtra(EXTRA_PACKAGES).orEmpty())
             ACTION_SYSTEM_UPDATE -> systemUpdate()
+            ACTION_ROOT_ON -> switchRootMode(on = true)
+            ACTION_ROOT_OFF -> switchRootMode(on = false)
+            ACTION_DELETE_PROOT_COPY -> thread {
+                paths.deleteTree(RootMode.protCopy(paths))
+                LinuxState.log(">>> Deleted the old proot copy of Debian")
+                main.post { android.widget.Toast.makeText(this, "Deleted the old proot copy", android.widget.Toast.LENGTH_SHORT).show() }
+            }
         }
         return START_STICKY
     }
@@ -132,7 +139,7 @@ class LinuxService : Service() {
     // ---- KDE session -----------------------------------------------------------------------
 
     private fun startSession(width: Int, height: Int) {
-        if (!paths.isInstalled || installer != null) return
+        if (!paths.isInstalled || installer != null || switching) return
         if (session?.isAlive == true) return
         val w = (width.coerceIn(480, 4096) / 2) * 2
         val h = (height.coerceIn(400, 4096) / 2) * 2
@@ -140,16 +147,28 @@ class LinuxService : Service() {
         updateNotification("Starting KDE Plasma")
         val noSeccomp = prefs.getBoolean(PREF_NO_SECCOMP, false)
         thread(name = "kde-session") {
+            if (RootMode.enabled(this)) {
+                // Leftovers from an earlier run (they outlive the app), then the image and its folders.
+                val code = RootMode.run(paths, RootMode.signalScript(paths, "KILL") + RootMode.mountScript(paths), LinuxState::log)
+                if (code != 0 || !java.io.File(paths.rootfs, "usr/bin").isDirectory) {
+                    LinuxState.set(
+                        LinuxState.Phase.ERROR,
+                        "Root mode: could not mount ${RootMode.image(paths).absolutePath} (exit $code). " +
+                            "Check that Magisk allows KDE Home and its Mount Namespace Mode is \"Inherit\".",
+                    )
+                    return@thread
+                }
+            }
             runCatching { shortcuts.sync() }
             runUpgrades()   // first, so apps it installs are pinned to the desktop below
-            runCatching { SessionTuning.apply(paths.rootfs, paths.userHome) }
+            runCatching { SessionTuning.apply(paths.rootfs, paths.userHome, realRoot = RootMode.enabled(this)) }
                 .onFailure { LinuxState.log("!!! Could not write KDE settings: ${it.message}") }
             startSystemBus()
             audio.start()
             LinuxState.set(LinuxState.Phase.STARTING, "Starting KDE Plasma (${w}×$h)…")
             val started = System.currentTimeMillis()
             val p = try {
-                proot.process(sessionScript(w, h), asUser = true, noSeccomp = noSeccomp).start()
+                proot.start(sessionScript(w, h), asUser = true, noSeccomp = noSeccomp)
             } catch (e: Exception) {
                 LinuxState.set(LinuxState.Phase.ERROR, "Could not start Linux: ${e.message}")
                 return@thread
@@ -228,7 +247,7 @@ class LinuxService : Service() {
         updateNotification("Updating Linux")
         upgrading = true
         try {
-            val p = proot.process(script, asUser = false).start()
+            val p = proot.start(script, asUser = false)
             p.inputStream.bufferedReader().forEachLine {
                 LinuxState.log(it)
                 showAptProgress(it)
@@ -295,7 +314,7 @@ class LinuxService : Service() {
             |done
             |wait
             |""".trimMargin()
-        systemBus = runCatching { proot.process(script, asUser = false).start() }.getOrNull()?.also { p ->
+        systemBus = runCatching { proot.start(script, asUser = false) }.getOrNull()?.also { p ->
             thread(name = "system-bus-log", isDaemon = true) {
                 // D-Bus, polkit and PackageKit messages: Internal storage/Linux/logs/services.log
                 val log = java.io.File(paths.base, "services.log").apply { writeText("") }
@@ -314,6 +333,10 @@ class LinuxService : Service() {
     }
 
     private fun stopSession() {
+        // In root mode Linux programs outlive their su process: stop them all directly.
+        if (RootMode.enabled(this)) thread(isDaemon = true) {
+            runCatching { RootMode.run(paths, RootMode.signalScript(paths, "CONT") + RootMode.signalScript(paths, "KILL")) }
+        }
         freezeTimer?.let { main.removeCallbacks(it) }
         if (LinuxFreezer.frozen) LinuxFreezer.thaw()   // stopped processes can't exit
         systemBus?.let { it.destroy(); systemBus = null }
@@ -352,6 +375,42 @@ class LinuxService : Service() {
         |exit ${'$'}code
         |""".trimMargin()
 
+    // ---- Root mode ---------------------------------------------------------------------------
+
+    @Volatile private var switching = false
+
+    /** Moves Debian into Internal storage/Linux/debian.img and runs it with chroot, or back to proot. */
+    private fun switchRootMode(on: Boolean) {
+        if (switching || installer != null || aptBusy) return
+        if (on == RootMode.enabled(this)) return
+        switching = true
+        stopSession()
+        LinuxState.set(LinuxState.Phase.INSTALLING, if (on) "Switching to root mode…" else "Switching back to proot…")
+        thread(name = "root-mode") {
+            try {
+                Thread.sleep(2500)   // let the session stop
+                if (on) {
+                    RootMode.migrate(paths, proot, LinuxState::log) { msg ->
+                        LinuxState.progress(msg, -1)
+                        updateNotification(msg)
+                    }
+                    RootMode.setEnabled(this, true)
+                    LinuxState.set(LinuxState.Phase.STOPPED, "Root mode is on: Debian runs from Internal storage/Linux/debian.img. Tap Start KDE.")
+                } else {
+                    RootMode.backToProot(paths)
+                    RootMode.setEnabled(this, false)
+                    LinuxState.set(LinuxState.Phase.STOPPED, "Back to proot. Tap Start KDE.")
+                }
+                updateNotification("Linux is ready")
+            } catch (e: Exception) {
+                LinuxState.log("!!! ${e.message}")
+                LinuxState.set(LinuxState.Phase.STOPPED, "Root mode: ${e.message}")
+            } finally {
+                switching = false
+            }
+        }
+    }
+
     // ---- Installing Linux apps without Discover ------------------------------------------------
 
     /** A Konsole window on the KDE desktop running as root: apt install works there. */
@@ -365,7 +424,7 @@ class LinuxService : Service() {
             |""".trimMargin()
         thread(name = "root-terminal", isDaemon = true) {
             runCatching {
-                val p = proot.process(script, asUser = false).start()
+                val p = proot.start(script, asUser = false)
                 p.inputStream.bufferedReader().forEachLine { }
             }
         }
@@ -422,7 +481,7 @@ class LinuxService : Service() {
             var lastError = ""
             val ok = try {
                 if (LinuxFreezer.frozen) LinuxFreezer.thaw()
-                val p = proot.process(script, asUser = false).start()
+                val p = proot.start(script, asUser = false)
                 p.inputStream.bufferedReader().forEachLine {
                     LinuxState.log(it)
                     log.appendText(it + "\n")
@@ -521,6 +580,9 @@ class LinuxService : Service() {
         const val ACTION_ROOT_TERMINAL = "com.limosa.kdehome.ROOT_TERMINAL"
         const val ACTION_APT_INSTALL = "com.limosa.kdehome.APT_INSTALL"
         const val ACTION_SYSTEM_UPDATE = "com.limosa.kdehome.SYSTEM_UPDATE"
+        const val ACTION_ROOT_ON = "com.limosa.kdehome.ROOT_ON"
+        const val ACTION_ROOT_OFF = "com.limosa.kdehome.ROOT_OFF"
+        const val ACTION_DELETE_PROOT_COPY = "com.limosa.kdehome.DELETE_PROOT_COPY"
         const val ACTION_HIDDEN = "com.limosa.kdehome.HIDDEN"
         const val PREF_RESOURCE_SAVING = "resourceSaving"
         private const val FREEZE_DELAY_MS = 20_000L
